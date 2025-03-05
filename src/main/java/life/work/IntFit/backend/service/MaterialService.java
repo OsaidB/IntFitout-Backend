@@ -38,6 +38,7 @@ public class MaterialService {
             Material material = existingMaterial.get();
             material.setName(materialDTO.getName());
             material.setUnit(materialDTO.getUnit());
+            material.setUnitCost(materialDTO.getUnitCost());
             Material updatedMaterial = materialRepository.save(material);
             return materialMapper.toDTO(updatedMaterial);
         } else {

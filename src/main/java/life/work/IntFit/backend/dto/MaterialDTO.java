@@ -11,4 +11,5 @@ public class MaterialDTO {
     private Long id;
     private String name;
     private String unit;
+    private Double unitCost;
 }

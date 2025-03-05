@@ -19,4 +19,7 @@ public class Material {
 
     @Column(nullable = false)
     private String unit;
+
+    @Column(nullable = false)
+    private Double unitCost;
 }
