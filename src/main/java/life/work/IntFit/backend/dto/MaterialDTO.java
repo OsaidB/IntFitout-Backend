@@ -1,15 +1,14 @@
 package life.work.IntFit.backend.dto;
 
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
+import lombok.*;
 
 @Getter
 @Setter
 @NoArgsConstructor
+@AllArgsConstructor
+@Builder
 public class MaterialDTO {
     private Long id;
     private String name;
-    private String unit;
-    private Double unitCost;
+//    private String unit;
 }

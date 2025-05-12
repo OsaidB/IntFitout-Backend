@@ -13,8 +13,22 @@ import java.util.Optional;
 @Service
 @RequiredArgsConstructor
 public class MaterialService {
+
     private final MaterialRepository materialRepository;
     private final MaterialMapper materialMapper;
+
+    // ✅ Smart lookup or creation for linking invoice items
+    public Material findOrCreate(String name, String unit) {
+        return materialRepository.findByName(name)
+                .orElseGet(() -> materialRepository.save(
+                        Material.builder()
+                                .name(name)
+//                                .unit(unit)
+                                .build()
+                ));
+    }
+
+    // ✅ RESTful service methods
 
     public List<MaterialDTO> getAllMaterials() {
         List<Material> materials = materialRepository.findAll();
@@ -37,8 +51,7 @@ public class MaterialService {
         if (existingMaterial.isPresent()) {
             Material material = existingMaterial.get();
             material.setName(materialDTO.getName());
-            material.setUnit(materialDTO.getUnit());
-            material.setUnitCost(materialDTO.getUnitCost());
+//            material.setUnit(materialDTO.getUnit());
             Material updatedMaterial = materialRepository.save(material);
             return materialMapper.toDTO(updatedMaterial);
         } else {
@@ -48,5 +61,12 @@ public class MaterialService {
 
     public void deleteMaterial(Long id) {
         materialRepository.deleteById(id);
+    }
+
+    // ✅ Get material by name (for controller support)
+    public MaterialDTO findByName(String name) {
+        return materialRepository.findByName(name)
+                .map(materialMapper::toDTO)
+                .orElse(null);
     }
 }

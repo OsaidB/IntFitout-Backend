@@ -13,6 +13,7 @@ import java.util.List;
 @RequiredArgsConstructor
 @CrossOrigin("*")
 public class MaterialController {
+
     private final MaterialService materialService;
 
     @GetMapping
@@ -41,5 +42,12 @@ public class MaterialController {
     public ResponseEntity<Void> deleteMaterial(@PathVariable Long id) {
         materialService.deleteMaterial(id);
         return ResponseEntity.noContent().build();
+    }
+
+    // 🔍 Smart material lookup or creation by name
+    @GetMapping("/by-name")
+    public ResponseEntity<MaterialDTO> getMaterialByName(@RequestParam String name) {
+        MaterialDTO material = materialService.findByName(name);
+        return material != null ? ResponseEntity.ok(material) : ResponseEntity.notFound().build();
     }
 }
