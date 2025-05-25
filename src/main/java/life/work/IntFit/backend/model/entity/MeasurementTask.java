@@ -15,7 +15,7 @@ public class MeasurementTask {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    private String taskType; // e.g., "Hidden Lights", "Liners"
+    private String taskType;
 
     private double length;
     private double width;
@@ -24,10 +24,11 @@ public class MeasurementTask {
     private String unit; // e.g., "m", "cm", etc.
     private double unitCost;
 
-    private double totalCost;
+    private double measurement; // computed measurement value (e.g., area or volume)
+    private double totalCost;   // computed total cost
 
     @Enumerated(EnumType.STRING)
-    private CalculationType calculationType; // FLAT or VOLUME
+    private CalculationType calculationType;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "room_id")
@@ -41,14 +42,14 @@ public class MeasurementTask {
         }
 
         switch (calculationType) {
-            case FLAT -> totalCost = unitCost * length * width;
-            case VOLUME -> totalCost = unitCost * length * width * height;
+            case FLAT -> measurement = length * width;
+            case VOLUME -> measurement = length * width * height;
         }
+
+        totalCost = unitCost * measurement;
     }
 
-
     public enum CalculationType {
-        FLAT,    // 2D (e.g., liners, tiles)
-        VOLUME   // 3D (e.g., concrete fill, insulation)
+        FLAT, VOLUME
     }
 }

@@ -22,4 +22,7 @@ public class TeamMember {
 
     private String experience;
     private String contact;
+
+    @Column(name = "daily_wage")
+    private Double dailyWage;  // New field representing pay per day for construction work
 }

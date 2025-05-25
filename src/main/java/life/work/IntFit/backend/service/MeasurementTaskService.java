@@ -18,6 +18,22 @@ public class MeasurementTaskService {
 
     private final RoomRepository roomRepository;
 
+    public MeasurementTaskDTO updateTask(Long id, MeasurementTaskDTO updatedDTO) {
+        MeasurementTask existing = taskRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found"));
+
+        existing.setTaskType(updatedDTO.getTaskType());
+        existing.setLength(updatedDTO.getLength());
+        existing.setWidth(updatedDTO.getWidth());
+        existing.setHeight(updatedDTO.getHeight());
+        existing.setUnit(updatedDTO.getUnit());
+        existing.setUnitCost(updatedDTO.getUnitCost());
+        existing.setCalculationType(updatedDTO.getCalculationType());
+
+        return taskMapper.toDTO(taskRepository.save(existing));
+    }
+
+
     public MeasurementTaskService(MeasurementTaskRepository taskRepository,
                                   MeasurementTaskMapper taskMapper,
                                   RoomRepository roomRepository) {

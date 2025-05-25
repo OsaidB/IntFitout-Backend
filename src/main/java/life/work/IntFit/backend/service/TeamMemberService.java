@@ -42,6 +42,7 @@ public class TeamMemberService {
                     existingMember.setRole(updatedDTO.getRole());
                     existingMember.setExperience(updatedDTO.getExperience());
                     existingMember.setContact(updatedDTO.getContact());
+                    existingMember.setDailyWage(updatedDTO.getDailyWage()); // Add this line
                     TeamMember updatedMember = teamMemberRepository.save(existingMember);
                     return teamMemberMapper.toDTO(updatedMember);
                 }).orElseThrow(() -> new RuntimeException("Team member not found"));

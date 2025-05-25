@@ -23,7 +23,7 @@ public class Worksite {
 
     private String city; //Ramallah
     private String area; //AL-Bireh
-    @Column(nullable = false)
+//    @Column(nullable = false)
     private String locationDetails; //مقابل بلدية البيرة
 
     private String type;         // e.g., Apartment, Villa, Shop (restaurant)

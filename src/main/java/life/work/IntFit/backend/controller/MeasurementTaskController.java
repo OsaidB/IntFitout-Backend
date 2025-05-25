@@ -18,6 +18,13 @@ public class MeasurementTaskController {
         this.taskService = taskService;
     }
 
+    @PutMapping("/{id}")
+    public ResponseEntity<MeasurementTaskDTO> updateTask(@PathVariable Long id, @RequestBody MeasurementTaskDTO dto) {
+        MeasurementTaskDTO updated = taskService.updateTask(id, dto);
+        return ResponseEntity.ok(updated);
+    }
+
+
     @GetMapping("/by-room/{roomId}")
     public ResponseEntity<List<MeasurementTaskDTO>> getTasksByRoom(@PathVariable Long roomId) {
         List<MeasurementTaskDTO> tasks = taskService.getTasksByRoomId(roomId);

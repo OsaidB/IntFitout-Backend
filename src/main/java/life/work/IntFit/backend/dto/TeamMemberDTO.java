@@ -13,4 +13,6 @@ public class TeamMemberDTO {
     private String role;
     private String experience;
     private String contact;
+
+    private Double dailyWage; // New field for construction worker's pay per day
 }
