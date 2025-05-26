@@ -44,11 +44,11 @@
 		</dependency>
 
 		<!-- Apache PDFBox for PDF Parsing -->
-		<dependency>
-			<groupId>org.apache.pdfbox</groupId>
-			<artifactId>pdfbox</artifactId>
-			<version>2.0.27</version>
-		</dependency>
+<!--		<dependency>-->
+<!--			<groupId>org.apache.pdfbox</groupId>-->
+<!--			<artifactId>pdfbox</artifactId>-->
+<!--			<version>2.0.27</version>-->
+<!--		</dependency>-->
 
 		<!-- Apache HTTPClient for Downloading PDF -->
 
@@ -72,12 +72,12 @@
 		</dependency>
 
 
-			<!-- PDF Processing -->
-			<dependency>
-				<groupId>org.apache.pdfbox</groupId>
-				<artifactId>pdfbox</artifactId>
-				<version>2.0.27</version>
-			</dependency>
+<!--			&lt;!&ndash; PDF Processing &ndash;&gt;-->
+<!--			<dependency>-->
+<!--				<groupId>org.apache.pdfbox</groupId>-->
+<!--				<artifactId>pdfbox</artifactId>-->
+<!--				<version>2.0.27</version>-->
+<!--			</dependency>-->
 
 			<!-- Tabula for Table Extraction -->
 <!--			<dependency>-->
