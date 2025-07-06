@@ -35,4 +35,10 @@ public class InvoiceController {
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
+
+    @GetMapping("/recent")
+    public ResponseEntity<List<InvoiceDTO>> getLast20Invoices() {
+        return ResponseEntity.ok(invoiceService.getLast20Invoices());
+    }
+
 }
