@@ -2,15 +2,21 @@ package life.work.IntFit.backend.service;
 
 import life.work.IntFit.backend.dto.InvoiceDTO;
 import life.work.IntFit.backend.dto.InvoiceItemDTO;
-import life.work.IntFit.backend.mapper.InvoiceMapper;
 import life.work.IntFit.backend.mapper.InvoiceItemMapper;
+import life.work.IntFit.backend.mapper.InvoiceMapper;
 import life.work.IntFit.backend.model.entity.*;
 import life.work.IntFit.backend.repository.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
+
+import life.work.IntFit.backend.utils.PythonInvoiceProcessor;
+
 
 @Service
 public class InvoiceService {
@@ -21,6 +27,9 @@ public class InvoiceService {
     private final MaterialRepository materialRepository;
     private final InvoiceMapper invoiceMapper;
     private final InvoiceItemMapper itemMapper;
+
+    @Autowired
+    private PythonInvoiceProcessor pythonProcessor;
 
     public InvoiceService(InvoiceRepository invoiceRepository,
                           InvoiceItemRepository itemRepository,
@@ -66,7 +75,7 @@ public class InvoiceService {
                     .orElseGet(() -> materialRepository.save(
                             Material.builder()
                                     .name(materialName)
-//                                    .unit(itemDTO.getUnit())
+                                    // .unit(itemDTO.getUnit())
                                     .build()
                     ));
 
@@ -76,11 +85,13 @@ public class InvoiceService {
 
         invoice.setItems(items);
         Invoice saved = invoiceRepository.save(invoice);
+
+        // 🔁 Send to Python processor
+        String invoiceUrl = "https://your-railway-app-url/api/invoices/" + saved.getId();
+        pythonProcessor.sendInvoiceToPython(invoiceUrl);
+
         return invoiceMapper.toDTO(saved);
     }
-
-
-
 
     public Optional<InvoiceDTO> getInvoice(Long id) {
         return invoiceRepository.findById(id).map(invoiceMapper::toDTO);
@@ -99,4 +110,9 @@ public class InvoiceService {
         return invoiceRepository.findById(id).map(invoiceMapper::toDTO);
     }
 
+    public List<InvoiceDTO> getLast20Invoices() {
+        Pageable limit = PageRequest.of(0, 20);
+        List<Invoice> invoices = invoiceRepository.findRecentInvoices(limit);
+        return invoiceMapper.toDTOs(invoices);
+    }
 }
