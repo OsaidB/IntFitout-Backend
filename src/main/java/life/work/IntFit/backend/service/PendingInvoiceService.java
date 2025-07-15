@@ -155,10 +155,13 @@ public class PendingInvoiceService {
     public void processSmsMessages(List<SmsMessageDTO> messages) {
         for (SmsMessageDTO message : messages) {
             if ("invoice".equalsIgnoreCase(message.getType())) {
-                // send to Python tool for processing and validation
                 pythonInvoiceProcessor.sendInvoiceToPython(message.getContent());
+//                if (parsed != null) {
+//                    savePendingInvoice(parsed); // ✅ Actually persist it
+//                } else {
+//                    System.err.println("❌ Failed to parse invoice from Python tool");
+//                }
             } else if ("status".equalsIgnoreCase(message.getType())) {
-                // save as raw status update
                 StatusMessage status = StatusMessage.builder()
                         .content(message.getContent())
                         .receivedAt(LocalDateTime.parse(message.getReceivedAt()))
@@ -167,6 +170,7 @@ public class PendingInvoiceService {
             }
         }
     }
+
 
 
 
