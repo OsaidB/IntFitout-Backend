@@ -32,4 +32,7 @@ public class WorksiteDTO {
     private String notes;
 
     private List<WorksiteContactDTO> contacts; // Optional: only if you want full contact details returned
+    private Long masterWorksiteId;
+
+
 }

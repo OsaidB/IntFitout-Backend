@@ -12,9 +12,11 @@ public interface WorksiteMapper {
 //    WorksiteMapper INSTANCE = Mappers.getMapper(WorksiteMapper.class);
 
     @Mapping(target = "contacts", source = "contacts")
+    @Mapping(target = "masterWorksiteId", source = "masterWorksite.id")
     WorksiteDTO toDTO(Worksite worksite);
 
     @Mapping(target = "contacts", source = "contacts")
+    @Mapping(target = "masterWorksite.id", source = "masterWorksiteId")
     Worksite toEntity(WorksiteDTO worksiteDTO);
 
     List<WorksiteDTO> toDTOList(List<Worksite> worksites);

@@ -43,4 +43,9 @@ public class Worksite {
 
     @OneToMany(mappedBy = "worksite", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<WorksiteContact> contacts;
+
+    @ManyToOne
+    @JoinColumn(name = "master_worksite_id")
+    private MasterWorksite masterWorksite;
+
 }

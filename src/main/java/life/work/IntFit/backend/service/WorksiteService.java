@@ -9,16 +9,25 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
-
+import life.work.IntFit.backend.model.entity.MasterWorksite;
+import life.work.IntFit.backend.repository.MasterWorksiteRepository;
 @Service
 public class WorksiteService {
 
     private final WorksiteRepository worksiteRepository;
     private final WorksiteMapper worksiteMapper;
 
-    public WorksiteService(WorksiteRepository worksiteRepository, WorksiteMapper worksiteMapper) {
+    // Add MasterWorksiteRepository as a dependency
+    private final MasterWorksiteRepository masterWorksiteRepository;
+
+    public WorksiteService(
+            WorksiteRepository worksiteRepository,
+            WorksiteMapper worksiteMapper,
+            MasterWorksiteRepository masterWorksiteRepository
+    ) {
         this.worksiteRepository = worksiteRepository;
         this.worksiteMapper = worksiteMapper;
+        this.masterWorksiteRepository = masterWorksiteRepository;
     }
 
     @Transactional
@@ -33,8 +42,17 @@ public class WorksiteService {
                 .map(worksiteMapper::toDTO);
     }
 
+
     public WorksiteDTO addWorksite(WorksiteDTO worksiteDTO) {
         Worksite worksite = worksiteMapper.toEntity(worksiteDTO);
+
+        // 🔗 Link to MasterWorksite if ID provided
+        if (worksiteDTO.getMasterWorksiteId() != null) {
+            MasterWorksite master = masterWorksiteRepository.findById(worksiteDTO.getMasterWorksiteId())
+                    .orElseThrow(() -> new RuntimeException("MasterWorksite not found with ID: " + worksiteDTO.getMasterWorksiteId()));
+            worksite.setMasterWorksite(master);
+        }
+
         Worksite savedWorksite = worksiteRepository.save(worksite);
         return worksiteMapper.toDTO(savedWorksite);
     }
