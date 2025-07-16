@@ -9,5 +9,5 @@ import lombok.Setter;
 @NoArgsConstructor
 public class SimpleAssignmentDTO {
     private Long teamMemberId;
-    private Long worksiteId;
+    private Long masterWorksiteId;
 }

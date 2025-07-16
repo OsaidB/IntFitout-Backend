@@ -12,8 +12,8 @@ import java.time.LocalDate;
 public class WorkAssignmentDTO {
     private Long id;
     private Long teamMemberId;
-    private Long worksiteId;
+    private Long masterWorksiteId;
     private String teamMemberName;
-    private String worksiteName;
+    private String masterWorksiteName;
     private LocalDate date;
 }

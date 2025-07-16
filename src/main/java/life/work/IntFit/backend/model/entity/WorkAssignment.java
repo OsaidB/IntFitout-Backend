@@ -21,9 +21,13 @@ public class WorkAssignment {
     @JoinColumn(name = "team_member_id")
     private TeamMember teamMember;
 
+//    @ManyToOne(optional = false)
+//    @JoinColumn(name = "worksite_id")
+//    private Worksite worksite;
+
     @ManyToOne(optional = false)
-    @JoinColumn(name = "worksite_id")
-    private Worksite worksite;
+    @JoinColumn(name = "master_worksite_id")
+    private MasterWorksite masterWorksite;
 
     @Column(nullable = false)
     private LocalDate date;
