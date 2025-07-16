@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @Component
@@ -37,8 +38,9 @@ public class PythonInvoiceProcessor {
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
                 PendingInvoiceDTO parsedInvoice = response.getBody();
 
-                // Step 2: Send parsed invoice to Spring Boot backend
-                HttpEntity<PendingInvoiceDTO> saveRequest = new HttpEntity<>(parsedInvoice, headers);
+                // ✅ Step 2: Wrap the parsed invoice in a List and send to Spring Boot backend
+                List<PendingInvoiceDTO> wrappedList = List.of(parsedInvoice);
+                HttpEntity<List<PendingInvoiceDTO>> saveRequest = new HttpEntity<>(wrappedList, headers);
 
                 ResponseEntity<Void> saveResponse = restTemplate.postForEntity(
                         SAVE_PENDING_ENDPOINT,
