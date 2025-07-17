@@ -13,6 +13,7 @@ import life.work.IntFit.backend.utils.PythonInvoiceProcessor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -172,6 +173,11 @@ public class PendingInvoiceService {
     }
 
 
+
+    public Optional<LocalDate> getLastPendingInvoiceDate() {
+        return pendingInvoiceRepository.findTopByOrderByDateDesc()
+                .map(p -> p.getDate().toLocalDate()); // 👈 convert LocalDateTime to LocalDate
+    }
 
 
 

@@ -7,7 +7,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 import java.util.List;
 import org.springframework.data.jpa.repository.Query;
-
+import java.util.Optional;
+import java.time.LocalDate;
 @Repository
 public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
 
@@ -22,5 +23,7 @@ public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
     ORDER BY i.date DESC
     """)
     List<Invoice> findRecentInvoices(org.springframework.data.domain.Pageable pageable);
+
+    Optional<Invoice> findTopByOrderByDateDesc();
 
 }

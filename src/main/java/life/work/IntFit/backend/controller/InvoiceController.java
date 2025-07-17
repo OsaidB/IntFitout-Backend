@@ -79,4 +79,21 @@ public class InvoiceController {
         return ResponseEntity.ok().build();
     }
 
+    @GetMapping("/latest-date")
+    public ResponseEntity<String> getLatestInvoiceDate() {
+        return invoiceService.getLastSavedInvoiceDate()
+                .map(date -> ResponseEntity.ok(date.toString()))
+                .orElse(ResponseEntity.noContent().build());
+    }
+
+    @GetMapping("/pending/latest-date")
+    public ResponseEntity<String> getLatestPendingInvoiceDate() {
+        return pendingInvoiceService.getLastPendingInvoiceDate()
+                .map(date -> ResponseEntity.ok(date.toString()))
+                .orElse(ResponseEntity.noContent().build());
+    }
+
+
+
+
 }
