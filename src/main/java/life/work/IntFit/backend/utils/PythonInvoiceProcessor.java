@@ -62,4 +62,26 @@ public class PythonInvoiceProcessor {
             System.err.println("❌ Exception during Python invoice processing: " + e.getMessage());
         }
     }
+
+    public void reprocessMismatchedInvoices() {
+        String FIX_MISMATCHED_URL = "https://invoices-convertor-1.onrender.com/reprocess-mismatched";
+
+        try {
+            ResponseEntity<Void> response = restTemplate.postForEntity(
+                    FIX_MISMATCHED_URL,
+                    null,  // No body required
+                    Void.class
+            );
+
+            if (response.getStatusCode().is2xxSuccessful()) {
+                System.out.println("✅ Mismatched invoices reprocessing triggered successfully.");
+            } else {
+                System.err.println("❌ Failed to trigger reprocessing: " + response.getStatusCode());
+            }
+        } catch (Exception e) {
+            System.err.println("❌ Exception while reprocessing mismatched invoices: " + e.getMessage());
+        }
+    }
+
+
 }

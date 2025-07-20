@@ -93,6 +93,11 @@ public class InvoiceController {
                 .orElse(ResponseEntity.noContent().build());
     }
 
+    @PostMapping("/pending/fix-unmatched")
+    public ResponseEntity<Void> fixUnmatchedInvoices() {
+        pendingInvoiceService.reprocessUnmatchedInvoices(); // Implement logic inside
+        return ResponseEntity.ok().build();
+    }
 
 
 

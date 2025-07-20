@@ -182,6 +182,11 @@ public class PendingInvoiceService {
     }
 
 
+    public void reprocessUnmatchedInvoices() {
+        pythonInvoiceProcessor.reprocessMismatchedInvoices();
+    }
+
+
 
 
 }
