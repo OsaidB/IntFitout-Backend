@@ -94,8 +94,10 @@ public class PendingInvoiceService {
     }
 
     public List<PendingInvoiceDTO> getAllPendingInvoices() {
-        return pendingInvoiceMapper.toDTOs(pendingInvoiceRepository.findAll());
+        List<PendingInvoice> pendingInvoices = pendingInvoiceRepository.findAllWithItems(); // Uses eager fetch
+        return pendingInvoiceMapper.toDTOs(pendingInvoices);
     }
+
 
     @Transactional
     public void deletePendingInvoice(Long id) {

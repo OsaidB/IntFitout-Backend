@@ -9,6 +9,8 @@ import java.util.Optional;
 import java.time.LocalDate;
 
 
+import org.springframework.data.jpa.repository.EntityGraph;
+
 @Repository
 public interface PendingInvoiceRepository extends JpaRepository<PendingInvoice, Long> {
 
@@ -19,4 +21,8 @@ public interface PendingInvoiceRepository extends JpaRepository<PendingInvoice, 
     List<PendingInvoice> findTop20ByOrderByParsedAtDesc();
 
     List<PendingInvoice> findByWorksiteIdAndConfirmedFalse(Long worksiteId);
+
+    // ✅ Eagerly fetch 'items' when getting all pending invoices
+    @EntityGraph(attributePaths = {"items", "items.material"})
+    List<PendingInvoice> findAllWithItems();
 }
