@@ -2,6 +2,7 @@ package life.work.IntFit.backend.repository;
 
 import life.work.IntFit.backend.model.entity.PendingInvoice;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -23,6 +24,12 @@ public interface PendingInvoiceRepository extends JpaRepository<PendingInvoice, 
     List<PendingInvoice> findByWorksiteIdAndConfirmedFalse(Long worksiteId);
 
     // ✅ Eagerly fetch 'items' when getting all pending invoices
-    @EntityGraph(attributePaths = {"items", "items.material"})
+    @Query("""
+    SELECT DISTINCT pi FROM PendingInvoice pi
+    LEFT JOIN FETCH pi.items items
+    LEFT JOIN FETCH items.material
+    ORDER BY pi.parsedAt DESC
+    """)
     List<PendingInvoice> findAllWithItems();
+
 }
