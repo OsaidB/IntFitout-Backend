@@ -32,4 +32,13 @@ public interface PendingInvoiceRepository extends JpaRepository<PendingInvoice, 
     """)
     List<PendingInvoice> findAllWithItems();
 
+    @Query("""
+    SELECT DISTINCT pi FROM PendingInvoice pi
+    LEFT JOIN FETCH pi.items items
+    LEFT JOIN FETCH items.material
+    WHERE pi.confirmed = false AND pi.totalMatch = false
+    ORDER BY pi.parsedAt DESC
+    """)
+    List<PendingInvoice> findByConfirmedFalseAndTotalMatchFalse();
+
 }

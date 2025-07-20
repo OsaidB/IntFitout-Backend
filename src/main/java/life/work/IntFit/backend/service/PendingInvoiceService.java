@@ -183,8 +183,18 @@ public class PendingInvoiceService {
 
 
     public void reprocessUnmatchedInvoices() {
-        pythonInvoiceProcessor.reprocessMismatchedInvoices();
+        List<PendingInvoice> unmatched = pendingInvoiceRepository.findByConfirmedFalseAndTotalMatchFalse();
+
+        // Extract PDF URLs from those invoices
+        List<String> pdfUrls = unmatched.stream()
+                .map(PendingInvoice::getPdfUrl)
+                .filter(url -> url != null && !url.isEmpty())
+                .toList();
+
+        // ✅ Send to processor
+        pythonInvoiceProcessor.reprocessMismatchedInvoices(pdfUrls);
     }
+
 
 
 
