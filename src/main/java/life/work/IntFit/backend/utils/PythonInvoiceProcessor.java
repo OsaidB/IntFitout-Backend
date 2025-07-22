@@ -38,9 +38,7 @@ public class PythonInvoiceProcessor {
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
                 PendingInvoiceDTO parsedInvoice = response.getBody();
 
-                // ✅ Step 2: Wrap the parsed invoice in a List and send to Spring Boot backend
-                List<PendingInvoiceDTO> wrappedList = List.of(parsedInvoice);
-                HttpEntity<List<PendingInvoiceDTO>> saveRequest = new HttpEntity<>(wrappedList, headers);
+                HttpEntity<PendingInvoiceDTO> saveRequest = new HttpEntity<>(parsedInvoice, headers);
 
                 ResponseEntity<Void> saveResponse = restTemplate.postForEntity(
                         SAVE_PENDING_ENDPOINT,
