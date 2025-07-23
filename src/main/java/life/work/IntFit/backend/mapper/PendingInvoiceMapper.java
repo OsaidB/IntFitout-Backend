@@ -10,7 +10,6 @@ import java.util.List;
 public interface PendingInvoiceMapper {
 
     @Mapping(source = "worksite.id", target = "worksiteId")
-    @Mapping(source = "worksite.name", target = "worksiteName")
     PendingInvoiceDTO toDTO(PendingInvoice pendingInvoice);
 
     @Mapping(target = "worksite", ignore = true) // set manually on confirmation
