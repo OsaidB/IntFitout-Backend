@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 
@@ -89,7 +90,7 @@ public class PendingInvoiceService {
             return item;
         }).toList();
 
-        pendingInvoice.setItems(items);
+        pendingInvoice.setItems(new HashSet<>(items));
         pendingInvoice.setConfirmed(false);
 
         PendingInvoice saved = pendingInvoiceRepository.save(pendingInvoice);

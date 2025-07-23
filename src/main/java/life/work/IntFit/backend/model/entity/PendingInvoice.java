@@ -5,7 +5,9 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 @Entity
 @Getter
@@ -32,7 +34,8 @@ public class PendingInvoice {
     private Worksite worksite; // nullable — will be linked on confirmation
 
     @OneToMany(mappedBy = "pendingInvoice", cascade = CascadeType.ALL, orphanRemoval = true)
-    private List<PendingInvoiceItem> items;
+    private Set<PendingInvoiceItem> items = new HashSet<>();
+
 
     @Column(name = "total_match")
     private Boolean totalMatch;
