@@ -10,9 +10,11 @@ import java.util.List;
 public interface PendingInvoiceMapper {
 
     @Mapping(source = "worksite.id", target = "worksiteId")
+    @Mapping(source = "reprocessedFrom.id", target = "reprocessedFromId")
     PendingInvoiceDTO toDTO(PendingInvoice pendingInvoice);
 
     @Mapping(target = "worksite", ignore = true) // set manually on confirmation
+    @Mapping(source = "reprocessedFromId", target = "reprocessedFrom.id")
     PendingInvoice toEntity(PendingInvoiceDTO dto);
 
     List<PendingInvoiceDTO> toDTOs(List<PendingInvoice> pendingInvoices);

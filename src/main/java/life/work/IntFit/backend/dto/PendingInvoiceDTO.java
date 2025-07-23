@@ -33,4 +33,7 @@ public class PendingInvoiceDTO {
     private Boolean confirmed;
 
     private LocalDateTime parsedAt;
+
+    private Long reprocessedFromId;
+
 }

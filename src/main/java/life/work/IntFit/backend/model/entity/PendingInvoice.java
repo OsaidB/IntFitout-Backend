@@ -42,4 +42,8 @@ public class PendingInvoice {
     private Boolean confirmed = false;
 
     private LocalDateTime parsedAt;
+
+    @ManyToOne
+    @JoinColumn(name = "reprocessed_from_id")
+    private PendingInvoice reprocessedFrom; // self-reference
 }
