@@ -62,6 +62,7 @@ public class PythonInvoiceProcessor {
         }
     }
 
+    // In PythonInvoiceProcessor.java, reprocessMismatchedInvoices method
     public void reprocessMismatchedInvoices(List<PendingInvoice> invoices) {
         String FIX_MISMATCHED_URL = "https://invoices-convertor-1.onrender.com/fix-mismatched";
         HttpHeaders headers = new HttpHeaders();
@@ -71,10 +72,10 @@ public class PythonInvoiceProcessor {
             try {
                 System.out.println("🔁 Reprocessing invoice ID " + invoice.getId() + " with URL: " + invoice.getPdfUrl());
 
-                // Send both the PDF URL and the ID so the Python tool knows the original
+                // Send both the PDF URL and the originalId (not id)
                 Map<String, Object> urlPayload = new HashMap<>();
                 urlPayload.put("url", invoice.getPdfUrl());
-                urlPayload.put("id", invoice.getId()); // 🟡 Include original ID
+                urlPayload.put("originalId", invoice.getId()); // ✅ Use originalId
 
                 HttpEntity<Map<String, Object>> request = new HttpEntity<>(urlPayload, headers);
 
