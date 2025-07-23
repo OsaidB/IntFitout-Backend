@@ -1,6 +1,7 @@
 package life.work.IntFit.backend.utils;
 
 import life.work.IntFit.backend.dto.PendingInvoiceDTO;
+import life.work.IntFit.backend.model.entity.PendingInvoice;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
@@ -61,19 +62,21 @@ public class PythonInvoiceProcessor {
         }
     }
 
-    public void reprocessMismatchedInvoices(List<String> invoiceUrls) {
+    public void reprocessMismatchedInvoices(List<PendingInvoice> invoices) {
         String FIX_MISMATCHED_URL = "https://invoices-convertor-1.onrender.com/fix-mismatched";
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
 
-        for (String url : invoiceUrls) {
+        for (PendingInvoice invoice : invoices) {
             try {
-                System.out.println("🔁 Sending to fix-mismatched: " + url);
+                System.out.println("🔁 Reprocessing invoice ID " + invoice.getId() + " with URL: " + invoice.getPdfUrl());
 
-                // Send invoice URL to fix-mismatched endpoint
-                Map<String, String> urlPayload = new HashMap<>();
-                urlPayload.put("url", url);
-                HttpEntity<Map<String, String>> request = new HttpEntity<>(urlPayload, headers);
+                // Send both the PDF URL and the ID so the Python tool knows the original
+                Map<String, Object> urlPayload = new HashMap<>();
+                urlPayload.put("url", invoice.getPdfUrl());
+                urlPayload.put("id", invoice.getId()); // 🟡 Include original ID
+
+                HttpEntity<Map<String, Object>> request = new HttpEntity<>(urlPayload, headers);
 
                 ResponseEntity<PendingInvoiceDTO> response = restTemplate.postForEntity(
                         FIX_MISMATCHED_URL,
@@ -95,17 +98,17 @@ public class PythonInvoiceProcessor {
                     );
 
                     if (saveResponse.getStatusCode().is2xxSuccessful()) {
-                        System.out.println("✅ Fixed invoice saved: " + url);
+                        System.out.println("✅ Fixed invoice saved: ID " + invoice.getId());
                     } else {
                         System.err.println("❌ Failed to save fixed invoice: " + saveResponse.getStatusCode());
                     }
 
                 } else {
-                    System.err.println("❌ Failed to fix invoice: " + response.getStatusCode());
+                    System.err.println("❌ Python tool failed for invoice ID " + invoice.getId() + ": " + response.getStatusCode());
                 }
 
             } catch (Exception e) {
-                System.err.println("❌ Exception while fixing invoice: " + url + " → " + e.getMessage());
+                System.err.println("❌ Exception while reprocessing invoice ID " + invoice.getId() + ": " + e.getMessage());
             }
         }
     }
