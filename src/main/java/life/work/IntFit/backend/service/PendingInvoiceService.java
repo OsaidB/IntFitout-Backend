@@ -64,20 +64,20 @@ public class PendingInvoiceService {
 
     @Transactional
     public PendingInvoiceDTO savePendingInvoice(PendingInvoiceDTO dto) {
+        // Convert DTO to entity
         PendingInvoice pendingInvoice = pendingInvoiceMapper.toEntity(dto);
         pendingInvoice.setParsedAt(LocalDateTime.now());
+        pendingInvoice.setConfirmed(false);
 
-        // ✅ Manually resolve reprocessedFrom by ID
-        if (dto.getReprocessedFromId() != null) {
-            PendingInvoice reference = new PendingInvoice();
-            reference.setId(dto.getReprocessedFromId());
-            pendingInvoice.setReprocessedFrom(reference);
-        }
+        // ✅ Set reprocessedFromId directly (NO object reference!)
+        pendingInvoice.setReprocessedFromId(dto.getReprocessedFromId());
 
+        // Map and prepare invoice items
         List<PendingInvoiceItem> items = dto.getItems().stream().map(itemDTO -> {
             PendingInvoiceItem item = itemMapper.toEntity(itemDTO);
             item.setPendingInvoice(pendingInvoice);
 
+            // Resolve or create material
             String materialName = Optional.ofNullable(itemDTO.getDescription())
                     .orElseThrow(() -> new IllegalArgumentException("Material description is missing"));
 
@@ -90,8 +90,8 @@ public class PendingInvoiceService {
             return item;
         }).toList();
 
+        // Set items and persist
         pendingInvoice.setItems(new HashSet<>(items));
-        pendingInvoice.setConfirmed(false);
 
         PendingInvoice saved = pendingInvoiceRepository.save(pendingInvoice);
         return pendingInvoiceMapper.toDTO(saved);

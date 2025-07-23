@@ -27,13 +27,10 @@ public interface PendingInvoiceRepository extends JpaRepository<PendingInvoice, 
     SELECT DISTINCT pi FROM PendingInvoice pi
     LEFT JOIN FETCH pi.items items
     LEFT JOIN FETCH items.material
-    LEFT JOIN FETCH pi.reprocessedFrom original
-    LEFT JOIN FETCH original.items originalItems
-    LEFT JOIN FETCH originalItems.material
-    WHERE pi.reprocessedFrom IS NOT NULL
     ORDER BY pi.parsedAt DESC
     """)
     List<PendingInvoice> findAllWithItems();
+
 
     @Query("""
     SELECT DISTINCT pi FROM PendingInvoice pi

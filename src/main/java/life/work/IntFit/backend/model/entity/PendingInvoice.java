@@ -46,7 +46,5 @@ public class PendingInvoice {
 
     private LocalDateTime parsedAt;
 
-    @ManyToOne
-    @JoinColumn(name = "reprocessed_from_id")
-    private PendingInvoice reprocessedFrom; // self-reference
+    private Long reprocessedFromId;
 }
