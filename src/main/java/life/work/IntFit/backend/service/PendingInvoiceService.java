@@ -66,6 +66,13 @@ public class PendingInvoiceService {
         PendingInvoice pendingInvoice = pendingInvoiceMapper.toEntity(dto);
         pendingInvoice.setParsedAt(LocalDateTime.now());
 
+        // ✅ Manually resolve reprocessedFrom by ID
+        if (dto.getReprocessedFromId() != null) {
+            PendingInvoice reference = new PendingInvoice();
+            reference.setId(dto.getReprocessedFromId());
+            pendingInvoice.setReprocessedFrom(reference);
+        }
+
         List<PendingInvoiceItem> items = dto.getItems().stream().map(itemDTO -> {
             PendingInvoiceItem item = itemMapper.toEntity(itemDTO);
             item.setPendingInvoice(pendingInvoice);
