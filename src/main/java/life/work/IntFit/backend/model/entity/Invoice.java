@@ -36,4 +36,8 @@ public class Invoice {
     @Column(name = "total_match")
     private Boolean total_match;
 
+    private String pdfUrl;
+    private LocalDateTime parsedAt;
+    private Long reprocessedFromId;
+
 }

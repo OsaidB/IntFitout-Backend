@@ -27,4 +27,8 @@ public class InvoiceDTO {
 
     private Boolean total_match;
 
+    private String pdfUrl;
+    private LocalDateTime parsedAt;
+    private Long reprocessedFromId;
+
 }
