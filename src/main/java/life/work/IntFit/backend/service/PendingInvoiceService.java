@@ -165,7 +165,7 @@ public class PendingInvoiceService {
 
     public void processSmsMessages(List<SmsMessageDTO> messages) {
         for (SmsMessageDTO message : messages) {
-            if ("invoice".equalsIgnoreCase(message.getType())) {
+            if ("invoice".equalsIgnoreCase(message.getType())) { //type is invoice
                 pythonInvoiceProcessor.sendInvoiceToPython(message.getContent());
 //                if (parsed != null) {
 //                    savePendingInvoice(parsed); // ✅ Actually persist it
@@ -173,12 +173,33 @@ public class PendingInvoiceService {
 //                    System.err.println("❌ Failed to parse invoice from Python tool");
 //                }
             } else if ("status".equalsIgnoreCase(message.getType())) {
+                String content = message.getContent();
+                Double amount = extractArabicNumber(content, "بمبلغ");
+                Double newTotalOwed = extractArabicNumber(content, "رصيدكم");
+
                 StatusMessage status = StatusMessage.builder()
-                        .content(message.getContent())
+                        .content(content)
                         .receivedAt(LocalDateTime.parse(message.getReceivedAt()))
+                        .amount(amount)
+                        .totalOwed(newTotalOwed)
                         .build();
+
                 statusMessageRepository.save(status);
             }
+
+        }
+    }
+
+    private Double extractArabicNumber(String text, String marker) {
+        try {
+            int markerIndex = text.indexOf(marker);
+            if (markerIndex == -1) return null;
+
+            String sub = text.substring(markerIndex + marker.length()).trim();
+            String number = sub.split(" ")[0].replace(",", "");
+            return Double.parseDouble(number);
+        } catch (Exception e) {
+            return null;
         }
     }
 

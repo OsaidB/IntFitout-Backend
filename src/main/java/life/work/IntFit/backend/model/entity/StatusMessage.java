@@ -20,4 +20,8 @@ public class StatusMessage {
     private String content;
 
     private LocalDateTime receivedAt;
+
+    private Double amount;
+
+    private Double totalOwed;
 }
