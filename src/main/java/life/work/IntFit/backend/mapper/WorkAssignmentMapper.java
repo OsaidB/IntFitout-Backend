@@ -15,6 +15,7 @@ public class WorkAssignmentMapper {
         dto.setTeamMemberName(assignment.getTeamMember().getName());
         dto.setMasterWorksiteName(assignment.getMasterWorksite().getApprovedName());
         dto.setDate(assignment.getDate());
+        dto.setTeamMemberDailyWage(assignment.getTeamMember().getDailyWage());
         return dto;
     }
 }

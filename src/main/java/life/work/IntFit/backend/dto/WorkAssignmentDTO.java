@@ -16,4 +16,7 @@ public class WorkAssignmentDTO {
     private String teamMemberName;
     private String masterWorksiteName;
     private LocalDate date;
+
+    private Double teamMemberDailyWage;
+
 }
