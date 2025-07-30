@@ -43,6 +43,12 @@ public class InvoiceController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    @GetMapping
+    public ResponseEntity<List<InvoiceDTO>> getInvoicesByDate(@RequestParam(name = "date") String date) {
+        return ResponseEntity.ok(invoiceService.getInvoicesByDate(date));
+    }
+
+
     @GetMapping("/recent")
     public ResponseEntity<List<InvoiceDTO>> getLast20Invoices() {
         return ResponseEntity.ok(invoiceService.getLast20Invoices());

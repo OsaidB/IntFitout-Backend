@@ -26,4 +26,10 @@ public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
 
     Optional<Invoice> findTopByOrderByDateDesc();
 
+    @Query("""
+    SELECT i FROM Invoice i
+    WHERE FUNCTION('DATE', i.date) = :date
+    """)
+    List<Invoice> findByDate(@org.springframework.data.repository.query.Param("date") LocalDate date);
+
 }

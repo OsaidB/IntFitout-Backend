@@ -122,5 +122,10 @@ public class InvoiceService {
                 .map(i -> i.getDate().toLocalDate());
     }
 
+    public List<InvoiceDTO> getInvoicesByDate(String date) {
+        LocalDate localDate = LocalDate.parse(date);
+        List<Invoice> invoices = invoiceRepository.findByDate(localDate);
+        return invoices.stream().map(invoiceMapper::toDTO).toList();
+    }
 
 }
