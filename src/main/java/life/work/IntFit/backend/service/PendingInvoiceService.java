@@ -122,7 +122,7 @@ public class PendingInvoiceService {
 
 
     @Transactional
-    public InvoiceDTO confirmPendingInvoice(Long pendingInvoiceId) {
+    public void confirmPendingInvoice(Long pendingInvoiceId) {
         PendingInvoice pending = pendingInvoiceRepository.findById(pendingInvoiceId)
                 .orElseThrow(() -> new IllegalArgumentException("Pending invoice not found"));
 
@@ -130,36 +130,8 @@ public class PendingInvoiceService {
             throw new IllegalStateException("This invoice has already been confirmed.");
         }
 
-        // Convert to Invoice entity
-        Invoice invoice = Invoice.builder()
-                .date(pending.getDate())
-                .netTotal(pending.getNetTotal())
-                .total(pending.getTotal())
-                .worksite(pending.getWorksite())
-                .worksiteName(pending.getWorksiteName())
-                .total_match(pending.getTotalMatch())
-                .build();
-
-        List<InvoiceItem> items = pending.getItems().stream().map(pendingItem -> {
-            InvoiceItem item = InvoiceItem.builder()
-                    .description(pendingItem.getDescription())
-                    .quantity(pendingItem.getQuantity())
-                    .unit_price(pendingItem.getUnit_price())
-                    .total_price(pendingItem.getTotal_price())
-                    .material(pendingItem.getMaterial())
-                    .invoice(invoice)
-                    .build();
-            return item;
-        }).toList();
-
-        invoice.setItems(items);
-        Invoice saved = invoiceRepository.save(invoice);
-
-        // Mark pending invoice as confirmed
         pending.setConfirmed(true);
         pendingInvoiceRepository.save(pending);
-
-        return invoiceMapper.toDTO(saved);
     }
 
 

@@ -1,55 +1,38 @@
 package life.work.IntFit.backend.service;
 
 import life.work.IntFit.backend.dto.InvoiceDTO;
-import life.work.IntFit.backend.dto.InvoiceItemDTO;
-import life.work.IntFit.backend.mapper.InvoiceItemMapper;
 import life.work.IntFit.backend.mapper.InvoiceMapper;
 import life.work.IntFit.backend.model.entity.*;
 import life.work.IntFit.backend.repository.*;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
-
-import life.work.IntFit.backend.utils.PythonInvoiceProcessor;
 
 
 @Service
 public class InvoiceService {
 
     private final InvoiceRepository invoiceRepository;
-    private final InvoiceItemRepository itemRepository;
     private final WorksiteRepository worksiteRepository;
     private final MaterialRepository materialRepository;
     private final InvoiceMapper invoiceMapper;
-    private final InvoiceItemMapper itemMapper;
-
-    @Autowired
-    private PythonInvoiceProcessor pythonProcessor;
 
     public InvoiceService(InvoiceRepository invoiceRepository,
-                          InvoiceItemRepository itemRepository,
                           WorksiteRepository worksiteRepository,
                           MaterialRepository materialRepository,
-                          InvoiceMapper invoiceMapper,
-                          InvoiceItemMapper itemMapper) {
+                          InvoiceMapper invoiceMapper) {
         this.invoiceRepository = invoiceRepository;
-        this.itemRepository = itemRepository;
         this.worksiteRepository = worksiteRepository;
         this.materialRepository = materialRepository;
         this.invoiceMapper = invoiceMapper;
-        this.itemMapper = itemMapper;
     }
 
     @Transactional
     public InvoiceDTO saveInvoice(InvoiceDTO dto) {
-        Invoice invoice = invoiceMapper.toEntity(dto);
-
         Worksite worksite;
 
         if (dto.getWorksiteId() != null) {
@@ -63,48 +46,46 @@ public class InvoiceService {
                     ));
         }
 
-        invoice.setWorksite(worksite);
+        // ✅ Build invoice manually
+        Invoice invoice = Invoice.builder()
+                .date(dto.getDate())
+                .netTotal(dto.getNetTotal())
+                .total(dto.getTotal())
+                .total_match(dto.getTotal_match())
+                .pdfUrl(dto.getPdfUrl())
+                .parsedAt(dto.getParsedAt())
+                .reprocessedFromId(dto.getReprocessedFromId())
+                .worksite(worksite)
+                .worksiteName(dto.getWorksiteName())
+                .build();
 
+        // ✅ Process items and materials
         List<InvoiceItem> items = dto.getItems().stream().map(itemDTO -> {
-            InvoiceItem item = itemMapper.toEntity(itemDTO);
-            item.setInvoice(invoice);
-
             String materialName = Optional.ofNullable(itemDTO.getDescription())
                     .orElseThrow(() -> new IllegalArgumentException("Material description is missing"));
 
             Material material = materialRepository.findByNameIgnoreCase(materialName)
-                    .orElseGet(() -> materialRepository.save(
-                            Material.builder()
-                                    .name(materialName)
-                                    // .unit(itemDTO.getUnit())
-                                    .build()
-                    ));
+                    .orElseGet(() -> materialRepository.save(Material.builder().name(materialName).build()));
 
-            item.setMaterial(material);
-            return item;
+            return InvoiceItem.builder()
+                    .description(itemDTO.getDescription())
+                    .quantity(itemDTO.getQuantity())
+                    .unit_price(itemDTO.getUnit_price())
+                    .total_price(itemDTO.getTotal_price())
+                    .material(material)
+                    .invoice(invoice)
+                    .build();
         }).toList();
 
         invoice.setItems(items);
         Invoice saved = invoiceRepository.save(invoice);
 
-        // 🔁 Send to Python processor
-        String invoiceUrl = "https://your-railway-app-url/api/invoices/" + saved.getId();
-        pythonProcessor.sendInvoiceToPython(invoiceUrl);
-
         return invoiceMapper.toDTO(saved);
-    }
-
-    public Optional<InvoiceDTO> getInvoice(Long id) {
-        return invoiceRepository.findById(id).map(invoiceMapper::toDTO);
     }
 
     public List<InvoiceDTO> getInvoicesByWorksiteId(Long worksiteId) {
         List<Invoice> invoices = invoiceRepository.findByWorksiteId(worksiteId);
         return invoiceMapper.toDTOs(invoices);
-    }
-
-    public void deleteInvoice(Long id) {
-        invoiceRepository.deleteById(id);
     }
 
     public Optional<InvoiceDTO> getInvoiceById(Long id) {

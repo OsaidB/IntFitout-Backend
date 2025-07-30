@@ -67,9 +67,10 @@ public class InvoiceController {
         return ResponseEntity.ok(pendingInvoiceService.getAllPendingInvoices());
     }
 
-    @PostMapping("/pending/confirm/{id}")
-    public ResponseEntity<InvoiceDTO> confirmPendingInvoice(@PathVariable Long id) {
-        return ResponseEntity.ok(pendingInvoiceService.confirmPendingInvoice(id));
+    @PatchMapping("/pending/{id}/confirm")
+    public ResponseEntity<Void> confirmPendingInvoice(@PathVariable Long id) {
+        pendingInvoiceService.confirmPendingInvoice(id);
+        return ResponseEntity.ok().build();
     }
 
     @DeleteMapping("/pending/{id}")
