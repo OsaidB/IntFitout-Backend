@@ -197,6 +197,7 @@ public class PendingInvoiceService {
         // Only keep invoices that have a non-empty PDF URL
         List<PendingInvoice> validUnmatched = unmatched.stream()
                 .filter(inv -> inv.getPdfUrl() != null && !inv.getPdfUrl().isEmpty())
+                .filter(inv -> inv.getReprocessedFromId() == null) // ⛔️ Skip already reprocessed ones
                 .toList();
 
         // ✅ Send full objects (not just URLs) to the Python processor
