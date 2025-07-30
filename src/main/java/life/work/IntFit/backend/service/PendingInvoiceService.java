@@ -197,10 +197,13 @@ public class PendingInvoiceService {
 
             String sub = text.substring(markerIndex + marker.length()).trim();
 
-            // Remove currency symbol and any non-digit/decimal characters
-            String number = sub.replaceAll("[^\\d.]", ""); // keeps digits and '.'
+            // Match the first number only: digits, optional decimal
+            java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(\\d+(\\.\\d+)?)").matcher(sub);
+            if (matcher.find()) {
+                return Double.parseDouble(matcher.group(1));
+            }
 
-            return Double.parseDouble(number);
+            return null;
         } catch (Exception e) {
             System.err.println("❌ Failed to extract number after marker \"" + marker + "\": " + e.getMessage());
             return null;
