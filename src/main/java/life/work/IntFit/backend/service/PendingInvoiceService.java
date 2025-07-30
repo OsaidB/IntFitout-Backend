@@ -196,9 +196,13 @@ public class PendingInvoiceService {
             if (markerIndex == -1) return null;
 
             String sub = text.substring(markerIndex + marker.length()).trim();
-            String number = sub.split(" ")[0].replace(",", "");
+
+            // Remove currency symbol and any non-digit/decimal characters
+            String number = sub.replaceAll("[^\\d.]", ""); // keeps digits and '.'
+
             return Double.parseDouble(number);
         } catch (Exception e) {
+            System.err.println("❌ Failed to extract number after marker \"" + marker + "\": " + e.getMessage());
             return null;
         }
     }
