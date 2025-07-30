@@ -66,7 +66,8 @@ public class PendingInvoiceService {
     public PendingInvoiceDTO savePendingInvoice(PendingInvoiceDTO dto) {
         // Convert DTO to entity
         PendingInvoice pendingInvoice = pendingInvoiceMapper.toEntity(dto);
-        pendingInvoice.setParsedAt(LocalDateTime.now());
+//        pendingInvoice.setParsedAt(LocalDateTime.now());
+        pendingInvoice.setDate(dto.getDate());
         pendingInvoice.setConfirmed(false);
 
         // ✅ Set reprocessedFromId directly (NO object reference!)
