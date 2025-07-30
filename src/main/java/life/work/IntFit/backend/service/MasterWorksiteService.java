@@ -56,7 +56,15 @@ public class MasterWorksiteService {
         MasterWorksite master = masterRepo.findById(masterId)
                 .orElseThrow(() -> new IllegalArgumentException("Master worksite not found"));
 
+        if (worksiteIds == null || worksiteIds.contains(null)) {
+            throw new IllegalArgumentException("Worksite IDs list contains null");
+        }
+
         List<Worksite> worksites = worksiteRepo.findAllById(worksiteIds);
+
+        if (worksites.size() != worksiteIds.size()) {
+            throw new IllegalArgumentException("Some worksite IDs were not found");
+        }
 
         for (Worksite worksite : worksites) {
             worksite.setMasterWorksite(master);
