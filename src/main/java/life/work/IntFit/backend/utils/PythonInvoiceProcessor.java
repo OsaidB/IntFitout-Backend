@@ -39,7 +39,8 @@ public class PythonInvoiceProcessor {
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
                 PendingInvoiceDTO parsedInvoice = response.getBody();
 
-                HttpEntity<PendingInvoiceDTO> saveRequest = new HttpEntity<>(parsedInvoice, headers);
+                List<PendingInvoiceDTO> wrapped = List.of(parsedInvoice);
+                HttpEntity<List<PendingInvoiceDTO>> saveRequest = new HttpEntity<>(wrapped, headers);
 
                 ResponseEntity<Void> saveResponse = restTemplate.postForEntity(
                         SAVE_PENDING_ENDPOINT,
