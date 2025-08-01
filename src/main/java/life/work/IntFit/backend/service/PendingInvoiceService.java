@@ -169,6 +169,9 @@ public class PendingInvoiceService {
             }
             case "PAYMENT" -> {
                 amount = extractArabicNumber(content, "بمبلغ");
+                if (amount == null) {
+                    amount = extractArabicNumber(content, "مبلغ");
+                }
                 if (amount != null) amount *= -1; // Payment is negative
             }
             case "RETURN" -> {
