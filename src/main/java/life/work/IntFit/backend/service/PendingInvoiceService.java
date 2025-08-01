@@ -153,15 +153,27 @@ public class PendingInvoiceService {
         String type = classifyStatusType(content);
 
         Double amount = null;
-        Double totalOwed = extractArabicNumber(content, "رصيدكم");
+//        Double totalOwed = extractArabicNumber(content, "رصيدكم");
         LocalDate balanceDate = null;
+
+        Double totalOwed = type.equals("BALANCE_AT_DATE")
+                ? extractArabicNumber(content, "هو")
+                : extractArabicNumber(content, "رصيدكم");
 
         switch (type) {
             case "BALANCE_AT_DATE" -> {
                 balanceDate = extractDate(content);
             }
-            case "ORDER_ISSUED", "RETURN", "PAYMENT" -> {
+            case "ORDER_ISSUED" -> {
                 amount = extractArabicNumber(content, "بمبلغ");
+            }
+            case "PAYMENT" -> {
+                amount = extractArabicNumber(content, "بمبلغ");
+                if (amount != null) amount *= -1; // Payment is negative
+            }
+            case "RETURN" -> {
+                amount = extractArabicNumber(content, "بقيمة");
+                if (amount != null) amount *= -1; // Return is negative
             }
         }
 
@@ -205,13 +217,12 @@ public class PendingInvoiceService {
 
     private Double extractArabicNumber(String text, String marker) {
         try {
-            int markerIndex = text.indexOf(marker);
-            if (markerIndex == -1) return null;
+            // Match marker with optional space, followed by number
+            java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
+                    java.util.regex.Pattern.quote(marker) + "\\s*(\\d+(\\.\\d+)?)"
+            );
 
-            String sub = text.substring(markerIndex + marker.length()).trim();
-
-            // Match the first number only: digits, optional decimal
-            java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(\\d+(\\.\\d+)?)").matcher(sub);
+            java.util.regex.Matcher matcher = pattern.matcher(text);
             if (matcher.find()) {
                 return Double.parseDouble(matcher.group(1));
             }
