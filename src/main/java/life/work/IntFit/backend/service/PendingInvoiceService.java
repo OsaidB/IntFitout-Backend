@@ -138,30 +138,70 @@ public class PendingInvoiceService {
 
     public void processSmsMessages(List<SmsMessageDTO> messages) {
         for (SmsMessageDTO message : messages) {
-            if ("invoice".equalsIgnoreCase(message.getType())) { //type is invoice
+            if ("invoice".equalsIgnoreCase(message.getType())) {
                 pythonInvoiceProcessor.sendInvoiceToPython(message.getContent());
-//                if (parsed != null) {
-//                    savePendingInvoice(parsed); // ✅ Actually persist it
-//                } else {
-//                    System.err.println("❌ Failed to parse invoice from Python tool");
-//                }
             } else if ("status".equalsIgnoreCase(message.getType())) {
-                String content = message.getContent();
-                Double amount = extractArabicNumber(content, "بمبلغ");
-                Double newTotalOwed = extractArabicNumber(content, "رصيدكم");
-
-                StatusMessage status = StatusMessage.builder()
-                        .content(content)
-                        .receivedAt(LocalDateTime.parse(message.getReceivedAt()))
-                        .amount(amount)
-                        .totalOwed(newTotalOwed)
-                        .build();
-
-                statusMessageRepository.save(status);
+                processStatusMessage(message);
             }
-
         }
     }
+
+    private void processStatusMessage(SmsMessageDTO message) {
+        String content = message.getContent();
+        LocalDateTime receivedAt = LocalDateTime.parse(message.getReceivedAt());
+
+        String type = classifyStatusType(content);
+
+        Double amount = null;
+        Double totalOwed = extractArabicNumber(content, "رصيدكم");
+        LocalDate balanceDate = null;
+
+        switch (type) {
+            case "BALANCE_AT_DATE" -> {
+                balanceDate = extractDate(content);
+            }
+            case "ORDER_ISSUED", "RETURN", "PAYMENT" -> {
+                amount = extractArabicNumber(content, "بمبلغ");
+            }
+        }
+
+        StatusMessage status = StatusMessage.builder()
+                .content(content)
+                .receivedAt(receivedAt)
+                .amount(amount)
+                .totalOwed(totalOwed)
+                .statusType(StatusType.valueOf(type))
+                .balanceDate(balanceDate)
+                .build();
+
+        statusMessageRepository.save(status);
+    }
+
+    private String classifyStatusType(String content) {
+        if (content.contains("رصيدكم لغاية")) return "BALANCE_AT_DATE";
+        if (content.contains("اصدار طلبيه")) return "ORDER_ISSUED";
+        if (content.contains("مرتجع بضاعة")) return "RETURN";
+        if (content.contains("شكرا لسداد")) return "PAYMENT";
+        return "UNKNOWN";
+    }
+
+    private LocalDate extractDate(String content) {
+        try {
+            java.util.regex.Matcher matcher = java.util.regex.Pattern
+                    .compile("(\\d{1,2}/\\d{1,2}/\\d{4})")
+                    .matcher(content);
+
+            if (matcher.find()) {
+                String dateStr = matcher.group(1);
+                java.time.format.DateTimeFormatter formatter = java.time.format.DateTimeFormatter.ofPattern("d/M/yyyy");
+                return LocalDate.parse(dateStr, formatter);
+            }
+        } catch (Exception e) {
+            System.err.println("❌ Failed to extract date: " + e.getMessage());
+        }
+        return null;
+    }
+
 
     private Double extractArabicNumber(String text, String marker) {
         try {

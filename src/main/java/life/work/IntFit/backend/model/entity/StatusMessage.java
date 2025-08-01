@@ -3,6 +3,7 @@ package life.work.IntFit.backend.model.entity;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @Entity
@@ -24,4 +25,9 @@ public class StatusMessage {
     private Double amount;
 
     private Double totalOwed;
+
+    @Enumerated(EnumType.STRING)
+    private StatusType statusType;  // ✅ NEW
+
+    private LocalDate balanceDate;  // ✅ For "رصيدكم لغاية"
 }
