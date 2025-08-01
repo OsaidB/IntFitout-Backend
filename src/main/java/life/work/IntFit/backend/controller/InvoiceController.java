@@ -26,7 +26,12 @@ public class InvoiceController {
     // ✅ Normal Invoice Endpoints
 
     @PostMapping
-    public ResponseEntity<InvoiceDTO> createInvoice(@RequestBody InvoiceDTO invoiceDTO) {
+    public ResponseEntity<?> createInvoice(@RequestBody InvoiceDTO invoiceDTO) {
+        if (invoiceDTO == null) {
+            System.err.println("❌ Received null InvoiceDTO");
+            return ResponseEntity.badRequest().body("Invoice data is missing.");
+        }
+
         InvoiceDTO saved = invoiceService.saveInvoice(invoiceDTO);
         return ResponseEntity.ok(saved);
     }
@@ -57,7 +62,12 @@ public class InvoiceController {
     // 🟡 Pending Invoice Endpoints
 
     @PostMapping("/pending/upload")
-    public ResponseEntity<Void> uploadPendingInvoices(@RequestBody List<PendingInvoiceDTO> pendingInvoices) {
+    public ResponseEntity<?> uploadPendingInvoices(@RequestBody List<PendingInvoiceDTO> pendingInvoices) {
+        if (pendingInvoices == null || pendingInvoices.isEmpty()) {
+            System.err.println("❌ Received empty pending invoice list");
+            return ResponseEntity.badRequest().body("Pending invoice list is empty.");
+        }
+
         pendingInvoiceService.savePendingInvoices(pendingInvoices);
         return ResponseEntity.ok().build();
     }
@@ -81,7 +91,12 @@ public class InvoiceController {
 
 
     @PostMapping("/sms-invoices/upload")
-    public ResponseEntity<Void> uploadSmsMessages(@RequestBody List<SmsMessageDTO> messages) {
+    public ResponseEntity<?> uploadSmsMessages(@RequestBody List<SmsMessageDTO> messages) {
+        if (messages == null || messages.isEmpty()) {
+            System.err.println("❌ Received empty SMS message list");
+            return ResponseEntity.badRequest().body("SMS message list is empty.");
+        }
+
         pendingInvoiceService.processSmsMessages(messages);
         return ResponseEntity.ok().build();
     }
@@ -102,7 +117,7 @@ public class InvoiceController {
 
     @PostMapping("/pending/fix-unmatched")
     public ResponseEntity<Void> fixUnmatchedInvoices() {
-        pendingInvoiceService.reprocessUnmatchedInvoices(); // Implement logic inside
+        pendingInvoiceService.reprocessUnmatchedInvoices();
         return ResponseEntity.ok().build();
     }
 

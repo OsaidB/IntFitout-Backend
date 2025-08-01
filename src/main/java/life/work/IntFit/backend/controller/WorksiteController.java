@@ -2,10 +2,10 @@ package life.work.IntFit.backend.controller;
 
 import life.work.IntFit.backend.dto.WorksiteDTO;
 import life.work.IntFit.backend.service.WorksiteService;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
-import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/worksites")
@@ -18,27 +18,33 @@ public class WorksiteController {
     }
 
     @GetMapping
-    public List<WorksiteDTO> getAllWorksites() {
-        return worksiteService.getAllWorksites();
+    public ResponseEntity<List<WorksiteDTO>> getAllWorksites() {
+        return ResponseEntity.ok(worksiteService.getAllWorksites());
     }
 
     @GetMapping("/{id}")
-    public Optional<WorksiteDTO> getWorksiteById(@PathVariable Long id) {
-        return worksiteService.getWorksiteById(id);
+    public ResponseEntity<WorksiteDTO> getWorksiteById(@PathVariable Long id) {
+        return worksiteService.getWorksiteById(id)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
     }
 
     @PostMapping
-    public WorksiteDTO addWorksite(@RequestBody WorksiteDTO worksiteDTO) {
-        return worksiteService.addWorksite(worksiteDTO);
+    public ResponseEntity<WorksiteDTO> addWorksite(@RequestBody WorksiteDTO worksiteDTO) {
+        if (worksiteDTO == null) return ResponseEntity.badRequest().build();
+        WorksiteDTO created = worksiteService.addWorksite(worksiteDTO);
+        return ResponseEntity.ok(created);
     }
 
     @PutMapping("/{id}")
-    public WorksiteDTO updateWorksite(@PathVariable Long id, @RequestBody WorksiteDTO updatedDTO) {
-        return worksiteService.updateWorksite(id, updatedDTO);
+    public ResponseEntity<WorksiteDTO> updateWorksite(@PathVariable Long id, @RequestBody WorksiteDTO updatedDTO) {
+        WorksiteDTO updated = worksiteService.updateWorksite(id, updatedDTO);
+        return ResponseEntity.ok(updated);
     }
 
     @DeleteMapping("/{id}")
-    public void deleteWorksite(@PathVariable Long id) {
+    public ResponseEntity<Void> deleteWorksite(@PathVariable Long id) {
         worksiteService.deleteWorksite(id);
+        return ResponseEntity.noContent().build();
     }
 }

@@ -9,7 +9,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/status-messages")
-@CrossOrigin("*") // Allow CORS if you're calling from frontend
+@CrossOrigin("*")
 public class StatusMessageController {
 
     private final StatusMessageRepository statusMessageRepository;
@@ -28,14 +28,18 @@ public class StatusMessageController {
         return ResponseEntity.ok(messages);
     }
 
-//    // Add a new status message
-//    @PostMapping
-//    public ResponseEntity<StatusMessage> addStatusMessage(@RequestBody StatusMessage message) {
-//        StatusMessage saved = statusMessageRepository.save(message);
-//        return ResponseEntity.ok(saved);
-//    }
+    /*
+    @PostMapping
+    public ResponseEntity<?> addStatusMessage(@RequestBody StatusMessage message) {
+        if (message == null || message.getContent() == null || message.getContent().isBlank()) {
+            return ResponseEntity.badRequest().body("Message content is required.");
+        }
 
-    // Optional: Delete a status message
+        StatusMessage saved = statusMessageRepository.save(message);
+        return ResponseEntity.ok(saved);
+    }
+    */
+
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteStatusMessage(@PathVariable Long id) {
         if (!statusMessageRepository.existsById(id)) {

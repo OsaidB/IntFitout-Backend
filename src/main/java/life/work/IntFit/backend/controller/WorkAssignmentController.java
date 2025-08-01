@@ -21,6 +21,10 @@ public class WorkAssignmentController {
 
     @PostMapping
     public ResponseEntity<Void> saveAssignments(@RequestBody DailyWorkAssignmentDTO dto) {
+        if (dto == null || dto.getDate() == null || dto.getAssignments() == null) {
+            return ResponseEntity.badRequest().build();
+        }
+
         workAssignmentService.saveAssignmentsForDate(dto);
         return ResponseEntity.ok().build();
     }
