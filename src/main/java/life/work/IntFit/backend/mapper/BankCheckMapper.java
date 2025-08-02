@@ -15,6 +15,8 @@ public class BankCheckMapper {
         dto.setRecipientName(entity.getRecipientName());
         dto.setNotes(entity.getNotes());
         dto.setCleared(entity.isCleared());
+        dto.setFromWhom(entity.getFromWhom());       // NEW
+        dto.setSerialNumber(entity.getSerialNumber()); // NEW
         return dto;
     }
 
@@ -26,6 +28,8 @@ public class BankCheckMapper {
                 .recipientName(dto.getRecipientName())
                 .notes(dto.getNotes())
                 .cleared(dto.isCleared())
+                .fromWhom(dto.getFromWhom())           // NEW
+                .serialNumber(dto.getSerialNumber())   // NEW
                 .build();
     }
 }

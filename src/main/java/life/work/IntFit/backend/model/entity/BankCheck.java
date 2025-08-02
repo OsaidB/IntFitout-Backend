@@ -26,4 +26,11 @@ public class BankCheck {
     private String notes;
 
     private boolean cleared = false; // if true, it was already counted
+
+    @Column
+    private String fromWhom;
+
+    @Column
+    private String serialNumber;
+
 }

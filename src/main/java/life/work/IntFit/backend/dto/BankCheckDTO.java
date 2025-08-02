@@ -12,4 +12,7 @@ public class BankCheckDTO {
     private String recipientName;
     private String notes;
     private boolean cleared;
+
+    private String fromWhom;      // NEW
+    private String serialNumber;  // NEW
 }
