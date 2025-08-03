@@ -1,7 +1,10 @@
 package life.work.IntFit.backend.tools;
 
 import life.work.IntFit.backend.model.entity.Material;
+import life.work.IntFit.backend.model.entity.InvoiceItem;
 import life.work.IntFit.backend.repository.MaterialRepository;
+import life.work.IntFit.backend.repository.InvoiceItemRepository;
+import life.work.IntFit.backend.repository.PendingInvoiceItemRepository;
 import life.work.IntFit.backend.utils.NameCleaner;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,8 +16,10 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 @Component
 public class MaterialNameFixer implements CommandLineRunner {
@@ -22,6 +27,14 @@ public class MaterialNameFixer implements CommandLineRunner {
 
     @Autowired
     private MaterialRepository materialRepository;
+
+    @Autowired
+    private InvoiceItemRepository invoiceItemRepository;
+
+    @Autowired
+    private PendingInvoiceItemRepository pendingInvoiceItemRepository;
+
+
 
     @Value("${material.name.cleaner.enabled:false}")
     private boolean cleanerEnabled;
@@ -35,11 +48,13 @@ public class MaterialNameFixer implements CommandLineRunner {
         }
 
         int updatedCount = 0;
+        int mergedCount = 0;
         Pageable pageable = PageRequest.of(0, 1000);
+        Page<Material> page = materialRepository.findAll(pageable);
 
-        Page<Material> page;
+//        Page<Material> page;
         do {
-            page = materialRepository.findAll(pageable);
+//            page = materialRepository.findAll(pageable);
             List<Material> updatedMaterials = new ArrayList<>();
 
             for (Material material : page.getContent()) {
@@ -49,7 +64,29 @@ public class MaterialNameFixer implements CommandLineRunner {
                     continue;
                 }
                 String newName = NameCleaner.clean(raw);
-                if (!newName.equals(raw)) {
+
+                // Check if the new name already exists
+                Optional<Material> existingMaterial = materialRepository.findByName(newName);
+                if (existingMaterial.isPresent() && !existingMaterial.get().getId().equals(material.getId())) {
+
+
+
+                    // Merge logic: Update invoiceItems and delete the old material
+                    Long targetId = existingMaterial.get().getId();
+                    Long sourceId = material.getId();
+
+                    int updatedItems = invoiceItemRepository.updateMaterialId(sourceId, targetId);
+                    logger.info("✅ Reassigned {} invoice items from material {} → {}", updatedItems, sourceId, targetId);
+
+                    int updatedPendingItems = pendingInvoiceItemRepository.updateMaterialId(sourceId, targetId);
+                    logger.info("✅ Reassigned {} pending invoice items from material {} → {}", updatedPendingItems, sourceId, targetId);
+
+                    materialRepository.delete(material);
+                    mergedCount++;
+                    logger.info("Merged material ID {} into ID {} with name {}", sourceId, targetId, newName);
+
+                } else if (!newName.equals(raw)) {
+                    // Update with new unique name
                     material.setName(newName);
                     updatedMaterials.add(material);
                     updatedCount++;
@@ -69,8 +106,9 @@ public class MaterialNameFixer implements CommandLineRunner {
             }
 
             pageable = pageable.next();
+            page = materialRepository.findAll(pageable);
         } while (page.hasNext());
 
-        logger.info("✅ Cleaned {} material names.", updatedCount);
+        logger.info("✅ Cleaned {} material names and merged {} materials.", updatedCount, mergedCount);
     }
 }

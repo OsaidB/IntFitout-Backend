@@ -1,36 +1,43 @@
 package life.work.IntFit.backend.utils;
 
+import com.ibm.icu.text.Normalizer2;
+import lombok.Getter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+//import javax.annotation.PostConstruct;
+import jakarta.annotation.PostConstruct;
+
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.stream.Stream;
 
-import lombok.Getter;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 /**
  * Utility class for cleaning and standardizing construction material names.
- * Maps messy input strings to standardized names using a predefined immutable map.
+ * Maps messy input strings to standardized names using a predefined immutable map initialized via Stream.
+ * Uses ICU4J to normalize Arabic presentation forms to base characters for reliable matching.
  * The map can be accessed via {@link #getNameMap()} for read-only purposes.
+ * Note: With over 400 entries, consider externalizing to a file or database for better scalability.
  */
+@Component
 public class NameCleaner {
     private static final Logger logger = LoggerFactory.getLogger(NameCleaner.class);
 
-    /**
-     * An immutable map of raw (messy) material names to their standardized forms.
-     * Initialized with a large set of predefined mappings.
-     * Note: For scalability, consider externalizing to a file or database in the future.
-     * -- GETTER --
-     *  Returns a read-only view of the name mapping.
-     *  This method is intended for read-only access by other components.
-     *
-     * @return an unmodifiable map of raw names to standardized names
-
-     */
     @Getter
-    private static final Map<String, String> nameMap = Collections.unmodifiableMap(
-            Stream.of(
+    private static Map<String, String> nameMap;
+    private static final Normalizer2 normalizer = Normalizer2.getInstance(
+            null, "nfkc", Normalizer2.Mode.COMPOSE); // NFKC for compatibility decomposition
+
+    /**
+     * Initializes the name map by loading predefined mappings and normalizing keys.
+     * This method is called after bean construction by Spring.
+     */
+    @PostConstruct
+    public void init() {
+        nameMap = Collections.unmodifiableMap(
+                Stream.of(
 
                     Map.entry(".2*13ﺑﺮﺍﻏﻲ ﺑﺎﺡ ﻣﻘﺪﺡ ﺍﺳﻮﺩ", "براغي باح مقدح أسود - 13*2"),
                     Map.entry(".2*13 ﺑﺮﺍﻏﻲ ﻃﺒﻌﺔ ﺑﺎﺡ500", "براغي طبعة باح - 13*2"),
@@ -131,7 +138,7 @@ public class NameCleaner {
                     Map.entry(".60 سم تيكن5 ارضي20", "(0.06) تيكن أرضي 5 سم"),
                     Map.entry(".60 سم تيكن5 ارضي10", "(0.06) تيكن أرضي 5 سم"),
                     Map.entry(".60 سم تيكن5 ارضي", "(0.06) تيكن أرضي 5 سم"),
-                    Map.entry(".60  سم تيكن7 عمود70", "(0.06) تيكن عمود 5 سم"),
+                    Map.entry(".60  ﺳﻢ ﺗﻴﻜﻦ7 ﻋﻤﻮﺩ70", "(0.06) تيكن عمود 5 سم"),
 
                     Map.entry("T ﻡ3.66 ﻓﻮﺭﺳﻴﻠﻨﻚ FOX", "فورسيلنك FOX - 3.66 م"),
                     Map.entry("T ﻡ1.22 ﻓﻮﺭﺳﻴﻠﻨﻚ FOX", "فورسيلنك FOX - 1.22 م"),
@@ -373,23 +380,38 @@ public class NameCleaner {
                     Map.entry("ﻣﺘﺮ3  ﺻﺎﺝL ﺯﻭﺍﻳﺎ", "زوايا صاج L - 3 متر"),
                     Map.entry("ﻣﺘﺮ150 ﻭﺭﻕ ﺟﺒﺺ", "ورق جبصين 150 متر"),
                     Map.entry("ﻣﺘﺮ ﺍﻳﺰﻳﻔﺖ5 ﻣﺘﺮ", "عازل إيزيفت - 5 متر")
-            ).collect(HashMap::new, (m, e) -> m.put(e.getKey(), e.getValue()), HashMap::putAll)
-    );
+                ).collect(
+                        HashMap::new,
+                        (m, e) -> m.put(normalize(e.getKey()), e.getValue()),
+                        HashMap::putAll)
+        );
+        logger.info("Loaded {} name mappings", nameMap.size());
+    }
+
+    /**
+     * Normalizes an input string to remove presentation forms and ensure consistent comparison.
+     * Uses ICU4J's NFKC normalization to decompose presentation forms into base characters.
+     *
+     * @param input the string to normalize
+     * @return the normalized string
+     */
+    private static String normalize(String input) {
+        if (input == null) return null;
+        return normalizer.normalize(input);
+    }
 
     /**
      * Cleans a raw material name by mapping it to a standardized name.
-     * Normalizes the input by trimming whitespace and converting to lowercase for consistency.
+     * Normalizes the input using ICU4J to handle Arabic presentation forms before lookup.
      * If no mapping exists, logs a warning and returns the trimmed input.
      *
      * @param rawName the raw input name to clean
      * @return the standardized name or the trimmed input if no mapping exists
      */
     public static String clean(String rawName) {
-        if (rawName == null) {
-            return null;
-        }
+        if (rawName == null) return null;
 
-        String normalized = rawName.trim().toLowerCase();
+        String normalized = normalize(rawName.replaceAll("\\s+", " ").trim());
         String cleanedName = nameMap.getOrDefault(normalized, rawName.trim());
 
         if (cleanedName.equals(rawName.trim())) {
@@ -398,10 +420,4 @@ public class NameCleaner {
 
         return cleanedName;
     }
-
 }
-
-
-
-
-

@@ -43,6 +43,12 @@
 			<artifactId>spring-boot-starter-web</artifactId>
 		</dependency>
 
+		<dependency>
+			<groupId>com.ibm.icu</groupId>
+			<artifactId>icu4j</artifactId>
+			<version>74.1</version> <!-- Use the latest version -->
+		</dependency>
+
 		<!-- Apache PDFBox for PDF Parsing -->
 <!--		<dependency>-->
 <!--			<groupId>org.apache.pdfbox</groupId>-->
