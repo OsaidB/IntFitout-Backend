@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import life.work.IntFit.backend.utils.NameCleaner;
 
 
 @Service
@@ -61,14 +62,19 @@ public class InvoiceService {
 
         // ✅ Process items and materials
         List<InvoiceItem> items = dto.getItems().stream().map(itemDTO -> {
-            String materialName = Optional.ofNullable(itemDTO.getDescription())
+            String rawName = Optional.ofNullable(itemDTO.getDescription())
                     .orElseThrow(() -> new IllegalArgumentException("Material description is missing"));
 
-            Material material = materialRepository.findByNameIgnoreCase(materialName)
-                    .orElseGet(() -> materialRepository.save(Material.builder().name(materialName).build()));
+            // 🔥 Normalize the name using NameCleaner
+            String cleanedName = NameCleaner.clean(rawName);
+
+            // ✅ Lookup or create the material using the cleaned name
+            Material material = materialRepository.findByName(cleanedName)
+                    .orElseGet(() -> materialRepository.save(Material.builder().name(cleanedName).build()));
+
 
             return InvoiceItem.builder()
-                    .description(itemDTO.getDescription())
+                    .description(cleanedName) // Store cleaned as description (or keep rawName if needed)
                     .quantity(itemDTO.getQuantity())
                     .unit_price(itemDTO.getUnit_price())
                     .total_price(itemDTO.getTotal_price())

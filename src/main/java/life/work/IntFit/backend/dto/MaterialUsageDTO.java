@@ -1,5 +1,5 @@
 package life.work.IntFit.backend.dto;
-
+//not used
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
