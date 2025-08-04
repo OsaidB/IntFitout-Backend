@@ -18,5 +18,7 @@ public class Material {
     @Column(unique = true, nullable = false)
     private String name;
 
-//    private String unit;  // e.g., "m", "kg", "piece"
+    @Column(nullable = false)
+    @Builder.Default
+    private boolean newlyAdded = true;
 }

@@ -10,5 +10,5 @@ import lombok.*;
 public class MaterialDTO {
     private Long id;
     private String name;
-//    private String unit;
+    private boolean newlyAdded;
 }
