@@ -4,6 +4,7 @@ import life.work.IntFit.backend.dto.MaterialDTO;
 import life.work.IntFit.backend.mapper.MaterialMapper;
 import life.work.IntFit.backend.model.entity.Material;
 import life.work.IntFit.backend.repository.MaterialRepository;
+import life.work.IntFit.backend.repository.InvoiceRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -16,6 +17,7 @@ import life.work.IntFit.backend.dto.MaterialWithUsageDTO;
 public class MaterialService {
 
     private final MaterialRepository materialRepository;
+    private final InvoiceRepository invoiceRepository;
     private final MaterialMapper materialMapper;
 
     // ✅ Smart lookup or creation for linking invoice items
@@ -73,6 +75,10 @@ public class MaterialService {
     // ✅ Get materials sorted by usage count (for dashboard or analysis)
     public List<MaterialWithUsageDTO> getMaterialsWithUsage() {
         return materialRepository.findAllWithUsageCount();
+    }
+
+    public String getSampleInvoiceUrl(Long materialId) {
+        return invoiceRepository.findRandomInvoiceUrlByMaterial(materialId).orElse(null);
     }
 
 }

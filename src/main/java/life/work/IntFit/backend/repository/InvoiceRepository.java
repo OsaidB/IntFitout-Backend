@@ -34,4 +34,15 @@ public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
     """)
     List<Invoice> findByDate(@Param("date") LocalDate date);
 
+    @Query("""
+    SELECT i.pdfUrl
+    FROM Invoice i
+    JOIN InvoiceItem item ON item.invoice.id = i.id
+    WHERE item.material.id = :materialId AND i.pdfUrl IS NOT NULL
+    ORDER BY FUNCTION('RAND')
+    LIMIT 1
+    """)
+    Optional<String> findRandomInvoiceUrlByMaterial(@Param("materialId") Long materialId);
+
+
 }

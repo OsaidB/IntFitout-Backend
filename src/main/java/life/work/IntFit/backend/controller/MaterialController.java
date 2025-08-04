@@ -57,4 +57,11 @@ public class MaterialController {
         return ResponseEntity.ok(materialService.getMaterialsWithUsage());
     }
 
+    @GetMapping("/{id}/sample-invoice")
+    public ResponseEntity<String> getSampleInvoice(@PathVariable Long id) {
+        String url = materialService.getSampleInvoiceUrl(id);
+        return url != null ? ResponseEntity.ok(url) : ResponseEntity.noContent().build();
+    }
+
+
 }
