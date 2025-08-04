@@ -1,6 +1,7 @@
 package life.work.IntFit.backend.controller;
 
 import life.work.IntFit.backend.dto.MaterialDTO;
+import life.work.IntFit.backend.dto.MaterialWithUsageDTO;
 import life.work.IntFit.backend.service.MaterialService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -50,4 +51,10 @@ public class MaterialController {
         MaterialDTO material = materialService.findByName(name);
         return material != null ? ResponseEntity.ok(material) : ResponseEntity.notFound().build();
     }
+
+    @GetMapping("/with-usage")
+    public ResponseEntity<List<MaterialWithUsageDTO>> getMaterialsWithUsage() {
+        return ResponseEntity.ok(materialService.getMaterialsWithUsage());
+    }
+
 }

@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Optional;
+import life.work.IntFit.backend.dto.MaterialWithUsageDTO;
 
 @Service
 @RequiredArgsConstructor
@@ -69,4 +70,9 @@ public class MaterialService {
                 .map(materialMapper::toDTO)
                 .orElse(null);
     }
+    // ✅ Get materials sorted by usage count (for dashboard or analysis)
+    public List<MaterialWithUsageDTO> getMaterialsWithUsage() {
+        return materialRepository.findAllWithUsageCount();
+    }
+
 }
