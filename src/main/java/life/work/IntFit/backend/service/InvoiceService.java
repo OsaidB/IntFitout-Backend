@@ -40,8 +40,8 @@ public class InvoiceService {
             worksite = worksiteRepository.findById(dto.getWorksiteId())
                     .orElseThrow(() -> new IllegalArgumentException("Worksite not found"));
         } else {
-            String worksiteName = dto.getWorksiteName().trim();
-            worksite = worksiteRepository.findByNameIgnoreCase(worksiteName)
+            String worksiteName = normalizeWorksiteName(dto.getWorksiteName());
+            worksite = worksiteRepository.findByName(worksiteName)
                     .orElseGet(() -> worksiteRepository.save(
                             Worksite.builder().name(worksiteName).build()
                     ));
@@ -114,5 +114,13 @@ public class InvoiceService {
         List<Invoice> invoices = invoiceRepository.findByDate(localDate);
         return invoices.stream().map(invoiceMapper::toDTO).toList();
     }
+
+    public static String normalizeWorksiteName(String input) {
+        if (input == null) return null;
+
+        // Collapse multiple spaces into one, trim, lowercase
+        return input.replaceAll("\\s+", " ").trim().toLowerCase();
+    }
+
 
 }

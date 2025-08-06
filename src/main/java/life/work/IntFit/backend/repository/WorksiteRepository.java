@@ -9,6 +9,6 @@ import java.util.Optional;
 
 @Repository
 public interface WorksiteRepository extends JpaRepository<Worksite, Long> {
-    Optional<Worksite> findByNameIgnoreCase(String name);
+    Optional<Worksite> findByName(String name);
 
 }

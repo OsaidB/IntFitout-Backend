@@ -18,7 +18,7 @@ public class Worksite {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false)
+    @Column(unique = true, nullable = false)
     private String name; //هني بني البيرة
 
     private String city; //Ramallah

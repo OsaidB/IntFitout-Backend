@@ -44,9 +44,14 @@ public class WorksiteService {
 
 
     public WorksiteDTO addWorksite(WorksiteDTO worksiteDTO) {
+        // 🔒 Check if worksite name already exists
+        Optional<Worksite> existing = worksiteRepository.findByName(worksiteDTO.getName());
+        if (existing.isPresent()) {
+            throw new RuntimeException("A worksite with this name already exists: " + worksiteDTO.getName());
+        }
+
         Worksite worksite = worksiteMapper.toEntity(worksiteDTO);
 
-        // 🔗 Link to MasterWorksite if ID provided
         if (worksiteDTO.getMasterWorksiteId() != null) {
             MasterWorksite master = masterWorksiteRepository.findById(worksiteDTO.getMasterWorksiteId())
                     .orElseThrow(() -> new RuntimeException("MasterWorksite not found with ID: " + worksiteDTO.getMasterWorksiteId()));
@@ -56,6 +61,7 @@ public class WorksiteService {
         Worksite savedWorksite = worksiteRepository.save(worksite);
         return worksiteMapper.toDTO(savedWorksite);
     }
+
 
     public WorksiteDTO updateWorksite(Long id, WorksiteDTO updatedDTO) {
         return worksiteRepository.findById(id)
