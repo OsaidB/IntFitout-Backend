@@ -63,5 +63,10 @@ public class MaterialController {
         return url != null ? ResponseEntity.ok(url) : ResponseEntity.noContent().build();
     }
 
+    @GetMapping("/{id}/price-history")
+    public ResponseEntity<?> getPriceHistory(@PathVariable Long id) {
+        return ResponseEntity.ok(materialService.getPriceHistory(id));
+    }
+
 
 }

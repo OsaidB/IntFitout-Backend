@@ -1,8 +1,10 @@
 package life.work.IntFit.backend.service;
 
 import life.work.IntFit.backend.dto.MaterialDTO;
+import life.work.IntFit.backend.dto.PricePointDTO;
 import life.work.IntFit.backend.mapper.MaterialMapper;
 import life.work.IntFit.backend.model.entity.Material;
+import life.work.IntFit.backend.repository.InvoiceItemRepository;
 import life.work.IntFit.backend.repository.MaterialRepository;
 import life.work.IntFit.backend.repository.InvoiceRepository;
 import lombok.RequiredArgsConstructor;
@@ -19,6 +21,8 @@ public class MaterialService {
     private final MaterialRepository materialRepository;
     private final InvoiceRepository invoiceRepository;
     private final MaterialMapper materialMapper;
+
+    private final InvoiceItemRepository invoiceItemRepository;
 
     // ✅ Smart lookup or creation for linking invoice items
     public Material findOrCreate(String name, String unit) {
@@ -80,5 +84,10 @@ public class MaterialService {
     public String getSampleInvoiceUrl(Long materialId) {
         return invoiceRepository.findRandomInvoiceUrlByMaterial(materialId).orElse(null);
     }
+
+    public List<PricePointDTO> getPriceHistory(Long materialId) {
+        return invoiceItemRepository.findPriceHistoryByMaterialId(materialId);
+    }
+
 
 }
