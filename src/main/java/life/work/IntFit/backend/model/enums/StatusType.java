@@ -1,4 +1,4 @@
-package life.work.IntFit.backend.model.entity;
+package life.work.IntFit.backend.model.enums;
 
 public enum StatusType {
     BALANCE_AT_DATE,

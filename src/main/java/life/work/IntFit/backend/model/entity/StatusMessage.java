@@ -1,6 +1,7 @@
 package life.work.IntFit.backend.model.entity;
 
 import jakarta.persistence.*;
+import life.work.IntFit.backend.model.enums.StatusType;
 import lombok.*;
 
 import java.time.LocalDate;

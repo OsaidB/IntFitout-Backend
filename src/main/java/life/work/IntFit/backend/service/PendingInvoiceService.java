@@ -1,13 +1,12 @@
 package life.work.IntFit.backend.service;
 
-import life.work.IntFit.backend.dto.InvoiceDTO;
 import life.work.IntFit.backend.dto.PendingInvoiceDTO;
-import life.work.IntFit.backend.dto.PendingInvoiceItemDTO;
 import life.work.IntFit.backend.dto.SmsMessageDTO;
 import life.work.IntFit.backend.mapper.InvoiceMapper;
 import life.work.IntFit.backend.mapper.PendingInvoiceItemMapper;
 import life.work.IntFit.backend.mapper.PendingInvoiceMapper;
 import life.work.IntFit.backend.model.entity.*;
+import life.work.IntFit.backend.model.enums.StatusType;
 import life.work.IntFit.backend.repository.*;
 import life.work.IntFit.backend.utils.PythonInvoiceProcessor;
 import org.springframework.stereotype.Service;
