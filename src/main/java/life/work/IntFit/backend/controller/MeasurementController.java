@@ -1,4 +1,4 @@
-package life.work.IntFit.backend.controller;
-
-public class MeasurementController {
-}
+//package life.work.IntFit.backend.controller;
+//
+//public class MeasurementController {
+//}

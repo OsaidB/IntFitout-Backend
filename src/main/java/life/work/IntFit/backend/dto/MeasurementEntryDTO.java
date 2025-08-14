@@ -1,4 +1,4 @@
-package life.work.IntFit.backend.dto;
-
-public class MeasurementEntryDTO {
-}
+//package life.work.IntFit.backend.dto;
+//
+//public class MeasurementEntryDTO {
+//}

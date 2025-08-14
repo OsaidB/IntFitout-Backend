@@ -1,4 +1,4 @@
-package life.work.IntFit.backend.controller;
-
-public class MedicalSessionController {
-}
+//package life.work.IntFit.backend.controller;
+//
+//public class MedicalSessionController {
+//}

@@ -1,4 +1,4 @@
-package life.work.IntFit.backend.service;
-
-public class MeasurementService {
-}
+//package life.work.IntFit.backend.service;
+//
+//public class MeasurementService {
+//}

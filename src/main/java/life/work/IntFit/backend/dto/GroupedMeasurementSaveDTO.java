@@ -1,4 +1,4 @@
-package life.work.IntFit.backend.dto;
-
-public class GroupedMeasurementSaveDTO {
-}
+//package life.work.IntFit.backend.dto;
+//
+//public class GroupedMeasurementSaveDTO {
+//}
