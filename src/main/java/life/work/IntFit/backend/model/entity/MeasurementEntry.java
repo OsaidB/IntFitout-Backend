@@ -1,4 +1,4 @@
-package life.work.IntFit.backend.model.entity;
-
-public class MeasurementEntry {
-}
+//package life.work.IntFit.backend.model.entity;
+//
+//public class MeasurementEntry {
+//}
