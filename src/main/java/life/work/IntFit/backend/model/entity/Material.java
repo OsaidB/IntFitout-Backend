@@ -2,6 +2,7 @@ package life.work.IntFit.backend.model.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import life.work.IntFit.backend.model.enums.MaterialCategory;
 
 @Entity
 @Getter
@@ -21,4 +22,9 @@ public class Material {
     @Column(nullable = false)
     @Builder.Default
     private boolean newlyAdded = true;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    @Builder.Default
+    private MaterialCategory category = MaterialCategory.OTHER;
 }
