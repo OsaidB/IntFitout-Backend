@@ -8,8 +8,11 @@ import life.work.IntFit.backend.repository.MasterWorksiteRepository;
 import life.work.IntFit.backend.repository.WorksiteRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
+
+import static org.springframework.http.HttpStatus.NOT_FOUND;
 
 @Service
 public class MasterWorksiteService {
@@ -71,5 +74,16 @@ public class MasterWorksiteService {
         }
 
         worksiteRepo.saveAll(worksites);
+    }
+
+    @Transactional
+    public MasterWorksiteDTO updateNotes(Long id, String notes) {
+        MasterWorksite entity = masterRepo.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Master worksite not found"));
+
+        String normalized = notes == null ? "" : notes.trim();
+        entity.setNotes(normalized);
+
+        return mapper.toDTO(masterRepo.save(entity));
     }
 }

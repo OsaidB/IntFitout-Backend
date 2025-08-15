@@ -6,6 +6,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/master-worksites")
@@ -45,6 +46,16 @@ public class MasterWorksiteController {
         return ResponseEntity.ok().build();
     }
 
+    // 👇 NEW: update notes
+    @PutMapping("/{id}/notes")
+    public ResponseEntity<MasterWorksiteDTO> updateNotes(
+            @PathVariable Long id,
+            @RequestBody Map<String, String> body
+    ) {
+        String notes = body.getOrDefault("notes", "");
+        MasterWorksiteDTO updated = service.updateNotes(id, notes);
+        return ResponseEntity.ok(updated);
+    }
 
 }
 
