@@ -8,4 +8,7 @@ import java.util.List;
 
 public interface WorkAssignmentRepository extends JpaRepository<WorkAssignment, Long> {
     List<WorkAssignment> findByDate(LocalDate date);
+
+    /** Bulk‑delete all assignments for a given date. */
+    void deleteByDate(LocalDate date);
 }

@@ -1,8 +1,8 @@
 // --- SERVICE ---
 package life.work.IntFit.backend.service;
 
-import life.work.IntFit.backend.dto.DailyWorkAssignmentDTO;
-import life.work.IntFit.backend.dto.WorkAssignmentDTO;
+import life.work.IntFit.backend.dto.daily_assignments.DailyWorkAssignmentDTO;
+import life.work.IntFit.backend.dto.daily_assignments.WorkAssignmentDTO;
 
 import java.time.LocalDate;
 import java.util.List;
