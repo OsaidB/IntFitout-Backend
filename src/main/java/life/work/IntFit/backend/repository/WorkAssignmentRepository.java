@@ -11,4 +11,7 @@ public interface WorkAssignmentRepository extends JpaRepository<WorkAssignment, 
 
     /** Bulk‑delete all assignments for a given date. */
     void deleteByDate(LocalDate date);
+
+    List<WorkAssignment> findByDateBetween(LocalDate from, LocalDate to);
+
 }
