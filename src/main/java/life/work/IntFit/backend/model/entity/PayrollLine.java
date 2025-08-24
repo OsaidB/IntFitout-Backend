@@ -38,7 +38,23 @@ public class PayrollLine {
     // Final line total = baseWages + effectiveOtPay + adjustmentsTotal
     @Builder.Default private double finalTotal = 0;
 
-    @OneToMany(mappedBy = "payrollLine", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OneToMany(
+            mappedBy = "payrollLine",
+            cascade = CascadeType.ALL,
+            orphanRemoval = true
+    )
     @Builder.Default
+    @Setter(AccessLevel.NONE)              // <-- prevent replacing the list
     private List<PayrollAdjustment> adjustments = new ArrayList<>();
+
+    public void addAdjustment(PayrollAdjustment a) {
+        if (a == null) return;
+        adjustments.add(a);
+        a.setPayrollLine(this);
+    }
+    public void removeAdjustment(PayrollAdjustment a) {
+        if (a == null) return;
+        adjustments.remove(a);
+        a.setPayrollLine(null);
+    }
 }
