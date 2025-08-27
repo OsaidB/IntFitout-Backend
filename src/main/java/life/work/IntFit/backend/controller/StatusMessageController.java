@@ -48,4 +48,12 @@ public class StatusMessageController {
         statusMessageRepository.deleteById(id);
         return ResponseEntity.noContent().build();
     }
+
+    // 🔹 NEW: latest saved date (ISO-8601 string) or empty body if none
+    @GetMapping("/latest-saved-date")
+    public ResponseEntity<String> getLatestSavedDate() {
+        return statusMessageRepository.findTopByOrderByReceivedAtDesc()
+                .map(m -> ResponseEntity.ok(m.getReceivedAt().toString())) // e.g. 2025-08-27T09:41:12.345+03:00 or Z
+                .orElseGet(() -> ResponseEntity.ok("")); // frontend treats "" as null
+    }
 }
