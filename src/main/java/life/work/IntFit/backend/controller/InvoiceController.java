@@ -8,6 +8,7 @@ import life.work.IntFit.backend.service.PendingInvoiceService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @RestController
@@ -23,6 +24,7 @@ public class InvoiceController {
         this.pendingInvoiceService = pendingInvoiceService;
     }
 
+    // =========================
     // ✅ Normal Invoice Endpoints
 
     @PostMapping
@@ -48,6 +50,10 @@ public class InvoiceController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    /**
+     * Query invoices by business day (YYYY-MM-DD).
+     * Service uses a day window [00:00, next 00:00) so DB keeps actual times.
+     */
     @GetMapping
     public ResponseEntity<List<InvoiceDTO>> getInvoicesByDate(@RequestParam(name = "date") String date) {
         return ResponseEntity.ok(invoiceService.getInvoicesByDate(date));
@@ -59,6 +65,18 @@ public class InvoiceController {
         return ResponseEntity.ok(invoiceService.getLast20Invoices());
     }
 
+    // --------------------------------------------------------
+    // 🔹 NEW: time-aware (fixes the 00:00 issue on the frontend)
+    // --------------------------------------------------------
+    @GetMapping("/latest-business-datetime")
+    public ResponseEntity<String> getLatestInvoiceBusinessDateTime() {
+        return invoiceService.getLastSavedInvoiceDateTime()
+                .map(LocalDateTime::toString) // e.g., 2025-05-31T08:55:39
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.ok("")); // frontend treats "" as null
+    }
+
+    // ==============================
     // 🟡 Pending Invoice Endpoints
 
     @PostMapping("/pending/upload")
@@ -101,12 +119,18 @@ public class InvoiceController {
         return ResponseEntity.ok().build();
     }
 
-    @GetMapping("/latest-date")
-    public ResponseEntity<String> getLatestInvoiceDate() {
-        return invoiceService.getLastSavedInvoiceDate()
-                .map(date -> ResponseEntity.ok(date.toString()))
-                .orElse(ResponseEntity.noContent().build());
-    }
+
+//    // --------------------------------------------------------
+//    // ⚠️ Legacy: date-only (kept for backward compatibility)
+//    // --------------------------------------------------------
+//    @Deprecated
+//    @GetMapping("/latest-date")
+//    public ResponseEntity<String> getLatestInvoiceDate() {
+//        return invoiceService.getLastSavedInvoiceDate()
+//                .map(Object::toString)         // returns YYYY-MM-DD (date-only)
+//                .map(ResponseEntity::ok)
+//                .orElseGet(() -> ResponseEntity.ok(""));
+//    }
 
     @GetMapping("/pending/latest-date")
     public ResponseEntity<String> getLatestPendingInvoiceDate() {
@@ -121,6 +145,28 @@ public class InvoiceController {
         return ResponseEntity.ok().build();
     }
 
+    // 🔹 NEW: pending – single latest BUSINESS datetime (keeps time)
+    @GetMapping("/pending/latest-business-datetime")
+    public ResponseEntity<String> getLatestPendingInvoiceBusinessDateTime(
+            @RequestParam(name = "onlyUnconfirmed", defaultValue = "true") boolean onlyUnconfirmed
+    ) {
+        return pendingInvoiceService.getLastPendingInvoiceDateTime(onlyUnconfirmed)
+                .map(LocalDateTime::toString)   // e.g. 2025-08-24T08:58:00
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.ok("")); // frontend treats "" as null
+    }
 
 
+    // --------------------------------------------------------
+    // 🔹 NEW: pending – single latest (business LocalDate)
+    // --------------------------------------------------------
+    @GetMapping("/pending/latest-business-date")
+    public ResponseEntity<String> getLatestPendingInvoiceBusinessDate(
+            @RequestParam(name = "onlyUnconfirmed", defaultValue = "true") boolean onlyUnconfirmed
+    ) {
+        return pendingInvoiceService.getLastPendingInvoiceBusinessDate(onlyUnconfirmed)
+                .map(Object::toString) // YYYY-MM-DD
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.ok(""));
+    }
 }
