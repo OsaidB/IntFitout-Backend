@@ -63,7 +63,7 @@ public class PendingInvoiceService {
 
     @Transactional
     public PendingInvoiceDTO savePendingInvoice(PendingInvoiceDTO dto) {
-        // Convert DTO to entity
+        // Map DTO → entity
         PendingInvoice pendingInvoice = pendingInvoiceMapper.toEntity(dto);
 //        pendingInvoice.setParsedAt(LocalDateTime.now());
         pendingInvoice.setDate(dto.getDate());
@@ -72,8 +72,8 @@ public class PendingInvoiceService {
         // ✅ Set reprocessedFromId directly (NO object reference!)
         pendingInvoice.setReprocessedFromId(dto.getReprocessedFromId());
 
-        // Map and prepare invoice items
-        List<PendingInvoiceItem> items = dto.getItems().stream().map(itemDTO -> {
+        // Map items + ensure material existence
+        var items = dto.getItems().stream().map(itemDTO -> {
             PendingInvoiceItem item = itemMapper.toEntity(itemDTO);
             item.setPendingInvoice(pendingInvoice);
 
@@ -126,7 +126,7 @@ public class PendingInvoiceService {
         PendingInvoice pending = pendingInvoiceRepository.findById(pendingInvoiceId)
                 .orElseThrow(() -> new IllegalArgumentException("Pending invoice not found"));
 
-        if (pending.getConfirmed()) {
+        if (Boolean.TRUE.equals(pending.getConfirmed())) {
             throw new IllegalStateException("This invoice has already been confirmed.");
         }
 
@@ -201,13 +201,13 @@ public class PendingInvoiceService {
 
     private LocalDate extractDate(String content) {
         try {
-            java.util.regex.Matcher matcher = java.util.regex.Pattern
+            var matcher = java.util.regex.Pattern
                     .compile("(\\d{1,2}/\\d{1,2}/\\d{4})")
                     .matcher(content);
 
             if (matcher.find()) {
                 String dateStr = matcher.group(1);
-                java.time.format.DateTimeFormatter formatter = java.time.format.DateTimeFormatter.ofPattern("d/M/yyyy");
+                var formatter = java.time.format.DateTimeFormatter.ofPattern("d/M/yyyy");
                 return LocalDate.parse(dateStr, formatter);
             }
         } catch (Exception e) {
@@ -237,20 +237,47 @@ public class PendingInvoiceService {
     }
 
 
+    /**
+     * Legacy: latest business LocalDate among ALL pending invoices.
+     */
 
     public Optional<LocalDate> getLastPendingInvoiceDate() {
-        return pendingInvoiceRepository.findTopByOrderByDateDesc()
-                .map(p -> p.getDate().toLocalDate()); // 👈 convert LocalDateTime to LocalDate
+        return Optional.ofNullable(pendingInvoiceRepository.findLatestBusinessDateAll());
     }
 
+
+    /**
+     * Latest business LocalDate with optional unconfirmed-only filter.
+     */
+    public Optional<LocalDate> getLastPendingInvoiceBusinessDate(boolean onlyUnconfirmed) {
+        LocalDate d = onlyUnconfirmed
+                ? pendingInvoiceRepository.findLatestBusinessDateUnconfirmed()
+                : pendingInvoiceRepository.findLatestBusinessDateAll();
+        return Optional.ofNullable(d);
+    }
+
+    // =========================
+    // NEW: LocalDateTime (with time)
+    // =========================
+
+    /**
+     * Latest business LocalDateTime among pending invoices.
+     * Set onlyUnconfirmed=true to look only at unconfirmed rows.
+     */
+    public Optional<LocalDateTime> getLastPendingInvoiceDateTime(boolean onlyUnconfirmed) {
+        LocalDateTime dt = onlyUnconfirmed
+                ? pendingInvoiceRepository.findLatestBusinessDateTimeUnconfirmed()
+                : pendingInvoiceRepository.findLatestBusinessDateTimeAll();
+        return Optional.ofNullable(dt);
+    }
 
     public void reprocessUnmatchedInvoices() {
         List<PendingInvoice> unmatched = pendingInvoiceRepository.findByConfirmedFalseAndTotalMatchFalse();
 
-        // Only keep invoices that have a non-empty PDF URL
+        // Only keep invoices that have a non-empty PDF URL and weren't reprocessed already
         List<PendingInvoice> validUnmatched = unmatched.stream()
                 .filter(inv -> inv.getPdfUrl() != null && !inv.getPdfUrl().isEmpty())
-                .filter(inv -> inv.getReprocessedFromId() == null) // ⛔️ Skip already reprocessed ones
+                .filter(inv -> inv.getReprocessedFromId() == null)
                 .toList();
 
         // ✅ Send full objects (not just URLs) to the Python processor

@@ -9,6 +9,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import life.work.IntFit.backend.utils.NameCleaner;
@@ -47,7 +48,7 @@ public class InvoiceService {
                     ));
         }
 
-        // ✅ Build invoice manually
+        // Build invoice manually (date is LocalDateTime – keep it as-is)
         Invoice invoice = Invoice.builder()
                 .date(dto.getDate())
                 .netTotal(dto.getNetTotal())
@@ -60,21 +61,21 @@ public class InvoiceService {
                 .worksiteName(dto.getWorksiteName())
                 .build();
 
-        // ✅ Process items and materials
+        // Process items and materials
         List<InvoiceItem> items = dto.getItems().stream().map(itemDTO -> {
             String rawName = Optional.ofNullable(itemDTO.getDescription())
                     .orElseThrow(() -> new IllegalArgumentException("Material description is missing"));
 
-            // 🔥 Normalize the name using NameCleaner
+            // Normalize the name using NameCleaner
             String cleanedName = NameCleaner.clean(rawName);
 
-            // ✅ Lookup or create the material using the cleaned name
+            // Lookup or create the material using the cleaned name
             Material material = materialRepository.findByName(cleanedName)
                     .orElseGet(() -> materialRepository.save(Material.builder().name(cleanedName).build()));
 
 
             return InvoiceItem.builder()
-                    .description(cleanedName) // Store cleaned as description (or keep rawName if needed)
+                    .description(cleanedName) // Store cleaned name as description
                     .quantity(itemDTO.getQuantity())
                     .unit_price(itemDTO.getUnit_price())
                     .total_price(itemDTO.getTotal_price())
@@ -104,15 +105,33 @@ public class InvoiceService {
         return invoiceMapper.toDTOs(invoices);
     }
 
-    public Optional<LocalDate> getLastSavedInvoiceDate() {
+    /**
+     * Latest actual business datetime (keeps time; used by /latest-business-datetime).
+     */
+    public Optional<LocalDateTime> getLastSavedInvoiceDateTime() {
         return invoiceRepository.findTopByOrderByDateDesc()
-                .map(i -> i.getDate().toLocalDate());
+                .map(Invoice::getDate);
     }
 
+    /**
+     * Deprecated wrapper kept for compatibility – trims to LocalDate.
+     * Prefer getLastSavedInvoiceDateTime().
+     */
+    @Deprecated
+    public Optional<LocalDate> getLastSavedInvoiceDate() {
+        return getLastSavedInvoiceDateTime().map(LocalDateTime::toLocalDate);
+    }
+
+    /**
+     * Get all invoices that occurred on a specific business day (YYYY-MM-DD),
+     * using a day window [day 00:00, next day 00:00).
+     */
     public List<InvoiceDTO> getInvoicesByDate(String date) {
-        LocalDate localDate = LocalDate.parse(date);
-        List<Invoice> invoices = invoiceRepository.findByDate(localDate);
-        return invoices.stream().map(invoiceMapper::toDTO).toList();
+        LocalDate day = LocalDate.parse(date);
+        LocalDateTime start = day.atStartOfDay();
+        LocalDateTime end = day.plusDays(1).atStartOfDay();
+        List<Invoice> invoices = invoiceRepository.findByDateBetween(start, end);
+        return invoiceMapper.toDTOs(invoices);
     }
 
     public static String normalizeWorksiteName(String input) {
