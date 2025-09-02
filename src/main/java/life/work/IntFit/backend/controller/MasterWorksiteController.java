@@ -1,7 +1,9 @@
 package life.work.IntFit.backend.controller;
 
+import jakarta.persistence.EntityNotFoundException;
 import life.work.IntFit.backend.dto.MasterWorksiteDTO;
 import life.work.IntFit.backend.service.MasterWorksiteService;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -22,6 +24,18 @@ public class MasterWorksiteController {
     @GetMapping
     public ResponseEntity<List<MasterWorksiteDTO>> getAll() {
         return ResponseEntity.ok(service.getAll());
+    }
+
+    /** ➕ NEW: get single by ID */
+    @GetMapping("/{id}")
+    public ResponseEntity<?> getOne(@PathVariable Long id) {
+        try {
+            MasterWorksiteDTO dto = service.getById(id);
+            return ResponseEntity.ok(dto);
+        } catch (EntityNotFoundException ex) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body("Master worksite not found: #" + id);
+        }
     }
 
     @PostMapping
@@ -55,6 +69,18 @@ public class MasterWorksiteController {
         String notes = body.getOrDefault("notes", "");
         MasterWorksiteDTO updated = service.updateNotes(id, notes);
         return ResponseEntity.ok(updated);
+    }
+
+    /** ➕ NEW: delete by ID (matches your frontend delete call) */
+    @DeleteMapping("/{id}")
+    public ResponseEntity<?> delete(@PathVariable Long id) {
+        try {
+            service.delete(id);
+            return ResponseEntity.noContent().build();
+        } catch (EntityNotFoundException ex) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body("Master worksite not found: #" + id);
+        }
     }
 
 }

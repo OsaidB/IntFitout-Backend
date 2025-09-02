@@ -31,13 +31,22 @@ public class MasterWorksiteService {
         this.mapper = mapper;
     }
 
+    @Transactional(readOnly = true)
     public List<MasterWorksiteDTO> getAll() {
         return mapper.toDTOList(masterRepo.findAll());
     }
 
+    /** ➕ NEW: fetch single master worksite by ID */
+    @Transactional(readOnly = true)
+    public MasterWorksiteDTO getById(Long id) {
+        MasterWorksite entity = masterRepo.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Master worksite not found"));
+        return mapper.toDTO(entity);
+    }
+
     @Transactional
     public MasterWorksiteDTO add(String name) {
-        String trimmedName = name.trim();
+        String trimmedName = name == null ? "" : name.trim();
         if (trimmedName.isEmpty()) {
             throw new IllegalArgumentException("Group name cannot be empty");
         }
@@ -85,5 +94,24 @@ public class MasterWorksiteService {
         entity.setNotes(normalized);
 
         return mapper.toDTO(masterRepo.save(entity));
+    }
+
+    /** ➕ NEW: delete master worksite (detaches children first to avoid FK issues) */
+    @Transactional
+    public void delete(Long id) {
+        MasterWorksite entity = masterRepo.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Master worksite not found"));
+
+        // If Worksite has a FK to MasterWorksite, detach referencing rows first.
+        // Ensure WorksiteRepository has: List<Worksite> findByMasterWorksiteId(Long masterId);
+        List<Worksite> attached = worksiteRepo.findByMasterWorksiteId(id);
+        if (attached != null && !attached.isEmpty()) {
+            for (Worksite ws : attached) {
+                ws.setMasterWorksite(null);
+            }
+            worksiteRepo.saveAll(attached);
+        }
+
+        masterRepo.delete(entity);
     }
 }
