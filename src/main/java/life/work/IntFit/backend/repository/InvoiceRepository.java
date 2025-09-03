@@ -8,7 +8,6 @@ import org.springframework.stereotype.Repository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.domain.Pageable;
 
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -48,5 +47,27 @@ public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
     """)
     Optional<String> findRandomInvoiceUrlByMaterial(@Param("materialId") Long materialId);
 
+    /**
+     * Returns rows: [ master_worksite_id, sum_total ]
+     * - Groups invoices by master worksite between [from, to]
+     * - Uses i.total, falling back to i.net_total
+     * - Filters to confirmed invoices only
+     * - Works whether invoice has master_worksite_id directly
+     *   or only worksite_id (joined to worksite.master_worksite_id)
+     */
+    @Query(value = """
+    SELECT
+        w.master_worksite_id AS master_id,
+        ROUND(SUM(COALESCE(i.total, i.net_total)), 2) AS sum_total
+    FROM invoice i
+    LEFT JOIN worksites w ON w.id = i.worksite_id
+    WHERE i.date >= :from AND i.date < :to
+      AND w.master_worksite_id IS NOT NULL
+    GROUP BY w.master_worksite_id
+""", nativeQuery = true)
+    List<Object[]> sumInvoicesByMasterBetween(
+            @Param("from") LocalDateTime from,
+            @Param("to")   LocalDateTime to
+    );
 
 }
