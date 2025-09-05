@@ -1,10 +1,14 @@
 package life.work.IntFit.backend.controller;
 
+import life.work.IntFit.backend.controller.criteria.InvoiceSearchCriteria;
 import life.work.IntFit.backend.dto.InvoiceDTO;
 import life.work.IntFit.backend.dto.PendingInvoiceDTO;
 import life.work.IntFit.backend.dto.SmsMessageDTO;
 import life.work.IntFit.backend.service.InvoiceService;
 import life.work.IntFit.backend.service.PendingInvoiceService;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -23,6 +27,56 @@ public class InvoiceController {
         this.invoiceService = invoiceService;
         this.pendingInvoiceService = pendingInvoiceService;
     }
+
+    // ... your existing endpoints stay as-is ...
+
+    /**
+     * ✅ New: search/aggregate "all invoices" with optional filters.
+     * Params (all optional):
+     * - page, size        -> pagination; if absent, returns a simple List
+     * - fromDate, toDate  -> ISO LocalDateTime strings (inclusive range; toDate is treated as <= end-of-day)
+     * - worksiteId        -> filter by specific worksite
+     * - masterWorksiteId  -> filter by master (joins via worksite.masterWorksiteId)
+     * - q                 -> free text (id, worksite name, pdfUrl)
+     * - sort              -> 'date' | 'total' (defaults 'date')
+     * - dir               -> 'asc' | 'desc' (defaults 'desc')
+     */
+    @GetMapping(params = "!date")
+    public ResponseEntity<?> searchInvoices(
+            @RequestParam(required = false) String fromDate,
+            @RequestParam(required = false) String toDate,
+            @RequestParam(required = false) Long worksiteId,
+            @RequestParam(required = false) Long masterWorksiteId,
+            @RequestParam(required = false) String q,
+            @RequestParam(defaultValue = "date") String sort,
+            @RequestParam(defaultValue = "desc") String dir,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer size
+    ) {
+        // Pageable or no pagination
+        Sort springSort = Sort.by("desc".equalsIgnoreCase(dir) ? Sort.Direction.DESC : Sort.Direction.ASC,
+                "total".equalsIgnoreCase(sort) ? "total" : "date");
+
+        Pageable pageable = (page != null && size != null)
+                ? PageRequest.of(page, size, springSort)
+                : Pageable.unpaged().withSort(springSort);
+
+        InvoiceSearchCriteria criteria = InvoiceSearchCriteria.builder()
+                .fromDate(fromDate)
+                .toDate(toDate)
+                .worksiteId(worksiteId)
+                .masterWorksiteId(masterWorksiteId)
+                .q(q)
+                .build();
+
+        // If pageable is paged, return Page; otherwise List
+        var result = invoiceService.search(criteria, pageable);
+        return (page != null && size != null)
+                ? ResponseEntity.ok(result)              // Page<InvoiceDTO> -> { content, totalElements, ... }
+                : ResponseEntity.ok(result.getContent()); // List<InvoiceDTO> for your current UI
+    }
+
+    // (keep your /api/invoices?date=... endpoint exactly as you have it)
 
     // =========================
     // ✅ Normal Invoice Endpoints

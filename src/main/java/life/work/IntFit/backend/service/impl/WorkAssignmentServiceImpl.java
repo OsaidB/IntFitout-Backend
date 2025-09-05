@@ -9,14 +9,15 @@ import life.work.IntFit.backend.model.entity.MasterWorksite;
 import life.work.IntFit.backend.model.entity.TeamMember;
 import life.work.IntFit.backend.model.entity.WorkAssignment;
 import life.work.IntFit.backend.model.entity.WorkAssignmentOvertime;
-import life.work.IntFit.backend.repository.MasterWorksiteRepository;
-import life.work.IntFit.backend.repository.TeamMemberRepository;
 import life.work.IntFit.backend.repository.WorkAssignmentOvertimeRepository;
 import life.work.IntFit.backend.repository.WorkAssignmentRepository;
 import life.work.IntFit.backend.service.WorkAssignmentService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 
 import java.time.LocalDate;
 import java.util.*;
@@ -27,16 +28,17 @@ import java.util.stream.Collectors;
 public class WorkAssignmentServiceImpl implements WorkAssignmentService {
 
     private final WorkAssignmentRepository workAssignmentRepo;
-    private final MasterWorksiteRepository masterWorksiteRepo;
-    private final TeamMemberRepository teamMemberRepo;
     private final WorkAssignmentOvertimeRepository overtimeRepo;
     private final WorkAssignmentMapper mapper;
+
+    @PersistenceContext
+    private EntityManager em;
 
     @Override
     @Transactional(readOnly = true)
     public List<WorkAssignmentDTO> getAssignmentsByDate(LocalDate date) {
-        // Load all assignments for that date
-        List<WorkAssignment> rows = workAssignmentRepo.findByDate(date);
+        // ✅ Fetch-join to avoid N+1 on mapping
+        List<WorkAssignment> rows = workAssignmentRepo.findByDateWithJoins(date);
 
         // site counts per member for that date
         Map<Long, Integer> siteCounts = rows.stream()
@@ -71,21 +73,27 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
         // --- 1) Replace assignments for the date (delete then insert)
         workAssignmentRepo.deleteByDate(date);
 
-        List<WorkAssignment> toSave = (dto.getAssignments() == null ? List.<SimpleAssignmentDTO>of() : dto.getAssignments())
-                .stream()
-                .map(a -> {
-                    TeamMember member = teamMemberRepo.findById(a.getTeamMemberId())
-                            .orElseThrow(() -> new IllegalArgumentException("TeamMember not found: " + a.getTeamMemberId()));
-                    MasterWorksite master = masterWorksiteRepo.findById(a.getMasterWorksiteId())
-                            .orElseThrow(() -> new IllegalArgumentException("MasterWorksite not found: " + a.getMasterWorksiteId()));
+        // Optional: deduplicate pairs in case UI sends duplicates
+        Set<String> seen = new HashSet<>();
+        List<SimpleAssignmentDTO> incoming = dto.getAssignments() == null
+                ? List.of()
+                : dto.getAssignments().stream()
+                .filter(a -> a != null && a.getTeamMemberId() != null && a.getMasterWorksiteId() != null)
+                .filter(a -> seen.add(a.getTeamMemberId() + ":" + a.getMasterWorksiteId()))
+                .toList();
 
-                    return WorkAssignment.builder()
-                            .teamMember(member)
-                            .masterWorksite(master)
-                            .date(date)
-                            .build();
-                })
-                .collect(Collectors.toList());
+        List<WorkAssignment> toSave = new ArrayList<>(incoming.size());
+        for (SimpleAssignmentDTO a : incoming) {
+            // ✅ No SELECT here; attach proxies by id
+            TeamMember memberRef = em.getReference(TeamMember.class, a.getTeamMemberId());
+            MasterWorksite siteRef = em.getReference(MasterWorksite.class, a.getMasterWorksiteId());
+
+            toSave.add(WorkAssignment.builder()
+                    .teamMember(memberRef)
+                    .masterWorksite(siteRef)
+                    .date(date)
+                    .build());
+        }
 
         if (!toSave.isEmpty()) {
             workAssignmentRepo.saveAll(toSave);
@@ -101,12 +109,12 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
                 if (ot == null || ot.getTeamMemberId() == null) continue;
                 int hours = Math.max(0, ot.getOvertimeHours());
 
-                TeamMember member = teamMemberRepo.findById(ot.getTeamMemberId())
-                        .orElseThrow(() -> new IllegalArgumentException("TeamMember not found: " + ot.getTeamMemberId()));
+                // ✅ No SELECT here either
+                TeamMember memberRef = em.getReference(TeamMember.class, ot.getTeamMemberId());
 
                 otEntities.add(
                         WorkAssignmentOvertime.builder()
-                                .teamMember(member)
+                                .teamMember(memberRef)
                                 .date(date)
                                 .overtimeHours(hours)
                                 .build()

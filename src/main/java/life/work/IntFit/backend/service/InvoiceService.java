@@ -1,15 +1,20 @@
 package life.work.IntFit.backend.service;
 
+import life.work.IntFit.backend.controller.criteria.InvoiceSearchCriteria;
+import life.work.IntFit.backend.controller.criteria.InvoiceSpecs;
 import life.work.IntFit.backend.dto.InvoiceDTO;
 import life.work.IntFit.backend.mapper.InvoiceMapper;
 import life.work.IntFit.backend.model.entity.*;
 import life.work.IntFit.backend.repository.*;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Optional;
 import life.work.IntFit.backend.utils.NameCleaner;
@@ -141,5 +146,38 @@ public class InvoiceService {
         return input.replaceAll("\\s+", " ").trim().toLowerCase();
     }
 
+
+    public Page<InvoiceDTO> search(InvoiceSearchCriteria c, Pageable pageable) {
+        Specification<Invoice> spec = Specification.where(null);
+
+        // date range
+        LocalDateTime from = parseLdt(c.getFromDate());
+        LocalDateTime to   = parseLdt(c.getToDate());
+        if (from != null) spec = spec.and(InvoiceSpecs.dateGte(from));
+        if (to != null)   spec = spec.and(InvoiceSpecs.dateLt(to.plusDays(1))); // inclusive end-of-day
+
+        // worksite
+        if (c.getWorksiteId() != null) {
+            spec = spec.and(InvoiceSpecs.worksiteIdEq(c.getWorksiteId()));
+        }
+
+        // master worksite (join)
+        if (c.getMasterWorksiteId() != null) {
+            spec = spec.and(InvoiceSpecs.masterWorksiteIdEq(c.getMasterWorksiteId()));
+        }
+
+        // free-text q (id/worksiteName/pdfUrl)
+        if (c.getQ() != null && !c.getQ().isBlank()) {
+            spec = spec.and(InvoiceSpecs.freeText(c.getQ()));
+        }
+
+        Page<Invoice> page = invoiceRepository.findAll(spec, pageable);
+        return page.map(invoiceMapper::toDto);
+    }
+
+    private LocalDateTime parseLdt(String s) {
+        if (s == null || s.isBlank()) return null;
+        try { return LocalDateTime.parse(s); } catch (DateTimeParseException e) { return null; }
+    }
 
 }
