@@ -21,7 +21,7 @@ import java.util.*;
 public class PayrollService {
     private final PayrollWeekRepository weekRepo;
     private final PayrollLineRepository lineRepo;
-    private final PayrollAdjustmentRepository adjRepo; // kept, but not used in Option B
+    private final PayrollAdjustmentRepository adjRepo;
     private final WorkAssignmentRepository assignmentRepo;
     private final PayrollMapper mapper;
 
@@ -80,8 +80,7 @@ public class PayrollService {
                     .finalTotal(m.totalBase + effectiveOtPay)
                     .build();
 
-            week.addLine(line); // sets back-reference & keeps JPA happy
-
+            week.addLine(line); // sets back-reference
 
             tBase  += num(line.getBaseWages());
             tOt    += num(line.getEffectiveOtPay());
@@ -93,17 +92,13 @@ public class PayrollService {
         week.setTotalAdjustments(tAdj);
         week.setTotalToPay(tTotal);
 
-//        var saved = weekRepo.save(week);
-//        return mapper.toDTO(saved);
-        var saved = weekRepo.saveAndFlush(week);  // <-- force INSERTs now, IDs populated
+        var saved = weekRepo.saveAndFlush(week);  // ensure IDs now
         return mapper.toDTO(saved);
     }
 
     @Transactional
     public PayrollWeekDTO addAdjustment(Long weekId, Long lineId, double amount, String note) {
-        if (amount == 0.0) {
-            throw new BadRequestException("Amount must be non-zero");
-        }
+        if (amount == 0.0) throw new BadRequestException("Amount must be non-zero");
 
         var week = weekRepo.findById(weekId)
                 .orElseThrow(() -> new NotFoundException("Week not found: " + weekId));
@@ -117,24 +112,21 @@ public class PayrollService {
             throw new ConflictException("Line does not belong to the given week");
         }
 
-        // Build & link the child
+        // link child
         var adj = PayrollAdjustment.builder()
                 .amount(amount)
                 .note(note == null ? "" : note.trim())
                 .build();
-        line.addAdjustment(adj); // sets back-ref
+        line.addAdjustment(adj);
+        adjRepo.saveAndFlush(adj); // ensure child id
 
-        // 💡 Ensure the new child has a DB id before orphan-removal runs on the bag
-        adjRepo.saveAndFlush(adj);
-
-        // Recompute denormalized totals
-        recalcLine(line);
+        // ⬇️ Recompute using canonical hourly fallback
+        var hourlyByMid = canonicalHourlyByMember(week.getWeekStart(), week.getWeekEnd());
+        recalcLineWithHourly(line, hourlyByMid);
         recalcWeek(week);
 
         week.setUpdatedAt(OffsetDateTime.now());
-        var saved = weekRepo.saveAndFlush(week);
-
-        return mapper.toDTO(saved);
+        return mapper.toDTO(weekRepo.saveAndFlush(week));
     }
 
     @Transactional
@@ -152,16 +144,17 @@ public class PayrollService {
         line.setOtHoursOverride(hours);
         line.setOtOverrideNote(note);
 
-        recalcLine(line);
+        // ⬇️ Recompute using canonical hourly fallback
+        var hourlyByMid = canonicalHourlyByMember(week.getWeekStart(), week.getWeekEnd());
+        recalcLineWithHourly(line, hourlyByMid);
         recalcWeek(week);
 
         week.setUpdatedAt(OffsetDateTime.now());
-        return mapper.toDTO(weekRepo.saveAndFlush(week));   // single flush
+        return mapper.toDTO(weekRepo.saveAndFlush(week));
     }
 
     @Transactional
     public PayrollWeekDTO finalizeWeek(Long weekId) {
-        // Load week + lines + adjustments (write a fetch-join repo helper if you like)
         var week = weekRepo.findById(weekId).orElseThrow();
 
         LocalDate start = week.getWeekStart();
@@ -188,7 +181,7 @@ public class PayrollService {
         for (var e : agg.entrySet()) {
             long mid = e.getKey();
             var m = e.getValue();
-            double effOtPayFromDays = m.otPayFromDailyRates(); // also sets m.totalBase & m.totalOtHours
+            double effOtPayFromDays = m.otPayFromDailyRates(); // sets totalBase & totalOtHours
 
             var line = byMember.get(mid);
             if (line == null) {
@@ -207,8 +200,6 @@ public class PayrollService {
             line.setComputedOtHours(m.getTotalOtHours());
             line.setComputedOtPay(effOtPayFromDays);
 
-            // re-derive dependent fields (keeps adjustments & override)
-            recalcLine(line);
             touched.add(mid);
         }
 
@@ -218,11 +209,21 @@ public class PayrollService {
                 l.setBaseWages(0d);
                 l.setComputedOtHours(0d);
                 l.setComputedOtPay(0d);
-                recalcLine(l);
             }
         }
 
-        // 5) Roll up week snapshot and freeze
+        // 5) Recompute lines with canonical hourly fallback so effective OT is never dropped
+        var hourlyByMid = canonicalHourlyByMember(start, end);
+        for (var l : week.getLines()) {
+            // If we have hours but computed pay is zero, backfill computed pay from hourly
+            if (num(l.getComputedOtHours()) > 0 && num(l.getComputedOtPay()) == 0) {
+                double hourly = hourlyByMid.getOrDefault(l.getTeamMemberId(), 0.0);
+                l.setComputedOtPay(hourly * l.getComputedOtHours());
+            }
+            recalcLineWithHourly(l, hourlyByMid);
+        }
+
+        // 6) Roll up week snapshot and freeze
         recalcWeek(week);
         week.setStatus(PayrollWeek.Status.FINALIZED);
         week.setUpdatedAt(OffsetDateTime.now());
@@ -230,12 +231,36 @@ public class PayrollService {
         return mapper.toDTO(weekRepo.saveAndFlush(week));
     }
 
+    /** Original recalc, kept for reference. */
     private void recalcLine(PayrollLine l) {
         double computedOtHours = num(l.getComputedOtHours());
         double hourly = computedOtHours > 0 ? (num(l.getComputedOtPay()) / computedOtHours) : 0.0;
 
         double effectiveOtHours = (l.getOtHoursOverride() != null) ? l.getOtHoursOverride() : computedOtHours;
         l.setEffectiveOtPay(hourly * effectiveOtHours);
+
+        var adjs = l.getAdjustments();
+        double adjSum = (adjs == null) ? 0.0 : adjs.stream().mapToDouble(PayrollAdjustment::getAmount).sum();
+        l.setAdjustmentsTotal(adjSum);
+
+        l.setFinalTotal(num(l.getBaseWages()) + num(l.getEffectiveOtPay()) + adjSum);
+    }
+
+    /** Recalc using a canonical hourly fallback when computed hours/pay are missing. */
+    private void recalcLineWithHourly(PayrollLine l, Map<Long, Double> hourlyByMid) {
+        double computedOtHours = num(l.getComputedOtHours());
+        double hourly;
+
+        if (computedOtHours > 0) {
+            double cop = num(l.getComputedOtPay());
+            hourly = (cop > 0) ? (cop / computedOtHours)
+                    : hourlyByMid.getOrDefault(l.getTeamMemberId(), 0.0);
+        } else {
+            hourly = hourlyByMid.getOrDefault(l.getTeamMemberId(), 0.0);
+        }
+
+        double effectiveHours = (l.getOtHoursOverride() != null) ? l.getOtHoursOverride() : computedOtHours;
+        l.setEffectiveOtPay(hourly * effectiveHours);
 
         var adjs = l.getAdjustments();
         double adjSum = (adjs == null) ? 0.0 : adjs.stream().mapToDouble(PayrollAdjustment::getAmount).sum();
@@ -256,7 +281,7 @@ public class PayrollService {
         double tBase = 0, tOt = 0, tAdj = 0, tTotal = 0;
         for (var l : lines) {
             tBase  += num(l.getBaseWages());
-            tOt    += num(l.getEffectiveOtPay());
+            tOt    += num(l.getEffectiveOtPay());  // effective OT (respects override)
             tAdj   += num(l.getAdjustmentsTotal());
             tTotal += num(l.getFinalTotal());
         }
@@ -307,6 +332,35 @@ public class PayrollService {
             double dailyWage = 0;
             double otHours = 0;
         }
+    }
+
+    /**
+     * Build canonical hourly per member from week assignments.
+     * If member has OT hours in the week, use (sum(daily/8*ot)/sum(ot)).
+     * Otherwise fall back to avg daily wage over worked days divided by 8.
+     */
+    private Map<Long, Double> canonicalHourlyByMember(LocalDate start, LocalDate end) {
+        var assignments = assignmentRepo.findByDateBetween(start, end);
+        Map<Long, MemberAgg> agg = new HashMap<>();
+        for (var a : assignments) {
+            var tm = a.getTeamMember();
+            if (tm == null) continue;
+            long mid = tm.getId();
+            agg.computeIfAbsent(mid, k -> new MemberAgg(tm.getName())).accept(a);
+        }
+
+        Map<Long, Double> out = new HashMap<>();
+        for (var e : agg.entrySet()) {
+            var m = e.getValue();
+            double otPay = m.otPayFromDailyRates(); // fills totalBase & totalOtHours
+            long workedDays = m.days.values().stream().filter(d -> d.getDailyWage() > 0).count();
+            double hourly =
+                    (m.totalOtHours > 0)
+                            ? (otPay / m.totalOtHours)
+                            : (workedDays > 0 ? (m.totalBase / workedDays) / 8.0 : 0.0);
+            out.put(e.getKey(), hourly);
+        }
+        return out;
     }
 
     private static double safeGetNumber(Object target, String... getterNames) {
