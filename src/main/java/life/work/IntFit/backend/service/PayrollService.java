@@ -161,9 +161,72 @@ public class PayrollService {
 
     @Transactional
     public PayrollWeekDTO finalizeWeek(Long weekId) {
+        // Load week + lines + adjustments (write a fetch-join repo helper if you like)
         var week = weekRepo.findById(weekId).orElseThrow();
+
+        LocalDate start = week.getWeekStart();
+        LocalDate end   = week.getWeekEnd();
+
+        // 1) Aggregate CURRENT assignments Sat→Thu
+        var assignments = assignmentRepo.findByDateBetween(start, end); // inclusive
+        Map<Long, MemberAgg> agg = new HashMap<>();
+        for (var a : assignments) {
+            var tm = a.getTeamMember();
+            if (tm == null) continue;
+            long mid = tm.getId();
+            agg.computeIfAbsent(mid, k -> new MemberAgg(tm.getName())).accept(a);
+        }
+
+        // 2) Index existing lines (to keep overrides & adjustments)
+        Map<Long, PayrollLine> byMember = new HashMap<>();
+        if (week.getLines() != null) {
+            for (var l : week.getLines()) byMember.put(l.getTeamMemberId(), l);
+        }
+
+        // 3) Upsert lines from aggregation
+        Set<Long> touched = new HashSet<>();
+        for (var e : agg.entrySet()) {
+            long mid = e.getKey();
+            var m = e.getValue();
+            double effOtPayFromDays = m.otPayFromDailyRates(); // also sets m.totalBase & m.totalOtHours
+
+            var line = byMember.get(mid);
+            if (line == null) {
+                line = PayrollLine.builder()
+                        .teamMemberId(mid)
+                        .teamMemberName(m.getName())
+                        .build();
+                week.addLine(line); // set back-ref
+                byMember.put(mid, line);
+            } else if (line.getTeamMemberName() == null || line.getTeamMemberName().isBlank()) {
+                line.setTeamMemberName(m.getName());
+            }
+
+            // refresh computed fields from CURRENT assignments
+            line.setBaseWages(m.getTotalBase());
+            line.setComputedOtHours(m.getTotalOtHours());
+            line.setComputedOtPay(effOtPayFromDays);
+
+            // re-derive dependent fields (keeps adjustments & override)
+            recalcLine(line);
+            touched.add(mid);
+        }
+
+        // 4) Lines with no assignments this week → zero computed parts, keep adjustments/override
+        for (var l : week.getLines()) {
+            if (!touched.contains(l.getTeamMemberId())) {
+                l.setBaseWages(0d);
+                l.setComputedOtHours(0d);
+                l.setComputedOtPay(0d);
+                recalcLine(l);
+            }
+        }
+
+        // 5) Roll up week snapshot and freeze
+        recalcWeek(week);
         week.setStatus(PayrollWeek.Status.FINALIZED);
         week.setUpdatedAt(OffsetDateTime.now());
+
         return mapper.toDTO(weekRepo.saveAndFlush(week));
     }
 
