@@ -93,7 +93,9 @@ public class PayrollService {
         week.setTotalAdjustments(tAdj);
         week.setTotalToPay(tTotal);
 
-        var saved = weekRepo.save(week);
+//        var saved = weekRepo.save(week);
+//        return mapper.toDTO(saved);
+        var saved = weekRepo.saveAndFlush(week);  // <-- force INSERTs now, IDs populated
         return mapper.toDTO(saved);
     }
 
