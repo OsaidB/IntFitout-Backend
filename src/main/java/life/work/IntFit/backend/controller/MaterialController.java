@@ -1,13 +1,17 @@
+// File: backend/controller/MaterialController.java
 package life.work.IntFit.backend.controller;
 
 import life.work.IntFit.backend.dto.MaterialDTO;
 import life.work.IntFit.backend.dto.MaterialWithUsageDTO;
+import life.work.IntFit.backend.model.enums.MaterialCategory; // ✅ correct enum
 import life.work.IntFit.backend.service.MaterialService;
+import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Locale;
 
 @RestController
 @RequestMapping("/api/materials")
@@ -68,5 +72,29 @@ public class MaterialController {
         return ResponseEntity.ok(materialService.getPriceHistory(id));
     }
 
+    // ✅ NEW: set category for a material (PAINTING | GYPSUM | OTHER)
+    @PatchMapping("/{id}/category")
+    public ResponseEntity<MaterialDTO> setMaterialCategory(
+            @PathVariable Long id,
+            @RequestBody CategoryUpdateRequest body
+    ) {
+        if (body == null || body.getCategory() == null || body.getCategory().trim().isEmpty()) {
+            return ResponseEntity.badRequest().build();
+        }
+        final String raw = body.getCategory().trim().toUpperCase(Locale.ROOT);
 
+        final MaterialCategory cat;
+        try {
+            cat = MaterialCategory.valueOf(raw); // ✅ use enum from model.enums
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        return ResponseEntity.ok(materialService.updateCategory(id, cat));
+    }
+
+    @Data
+    public static class CategoryUpdateRequest {
+        private String category;
+    }
 }
