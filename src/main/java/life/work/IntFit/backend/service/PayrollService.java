@@ -38,62 +38,97 @@ public class PayrollService {
         var range = satThu(anchor);
         LocalDate start = range[0], end = range[1];
 
-        var existing = weekRepo.findByWeekStart(start);
-        if (existing.isPresent()) {
-            return mapper.toDTO(existing.get());
+        // 1) Load or create the week shell
+        PayrollWeek week = weekRepo.findByWeekStart(start).orElseGet(() -> {
+            return PayrollWeek.builder()
+                    .weekStart(start)
+                    .weekEnd(end)
+                    .createdAt(OffsetDateTime.now())
+                    .updatedAt(OffsetDateTime.now())
+                    .status(PayrollWeek.Status.DRAFT)
+                    .build();
+        });
+
+        // 2) If week is DRAFT, (up)sert lines from current assignments
+        if (week.getStatus() == PayrollWeek.Status.DRAFT) {
+            upsertLinesFromAssignments(week, start, end);   // 👈 new helper below
+            recalcWeek(week);
+            week.setUpdatedAt(OffsetDateTime.now());
+            week = weekRepo.saveAndFlush(week);
+        } else if (week.getWeekEnd() == null) {
+            // minor hygiene if an old row is missing week_end
+            week.setWeekEnd(end);
         }
 
+        return mapper.toDTO(week);
+    }
+
+    /** Build/refresh lines from Sat→Thu assignments while preserving overrides & adjustments. */
+    private void upsertLinesFromAssignments(PayrollWeek week, LocalDate start, LocalDate end) {
         var assignments = assignmentRepo.findByDateBetween(start, end);
 
+        // Aggregate per member (null-safe, like finalizeWeek)
         Map<Long, MemberAgg> agg = new HashMap<>();
         for (var a : assignments) {
-            long mid = a.getTeamMember().getId();
-            var m = agg.computeIfAbsent(mid, k -> new MemberAgg(a.getTeamMember().getName()));
-            m.accept(a);
+            var tm = a.getTeamMember();
+            if (tm == null) continue;
+            long mid = tm.getId();
+            agg.computeIfAbsent(mid, k -> new MemberAgg(tm.getName())).accept(a);
         }
 
-        var week = PayrollWeek.builder()
-                .weekStart(start)
-                .weekEnd(end)
-                .createdAt(OffsetDateTime.now())
-                .updatedAt(OffsetDateTime.now())
-                .status(PayrollWeek.Status.DRAFT)
-                .build();
+        // Index existing lines to preserve overrides/adjustments
+        Map<Long, PayrollLine> byMember = new HashMap<>();
+        if (week.getLines() != null) {
+            for (var l : week.getLines()) byMember.put(l.getTeamMemberId(), l);
+        }
 
-//        if (week.getLines() == null) week.setLines(new ArrayList<>()); // new entity => fine
-
-        double tBase = 0, tOt = 0, tAdj = 0, tTotal = 0;
-
+        // Upsert from aggregation
+        Set<Long> touched = new HashSet<>();
         for (var e : agg.entrySet()) {
-            var mid = e.getKey();
+            long mid = e.getKey();
             var m = e.getValue();
+            double effOtPayFromDays = m.otPayFromDailyRates(); // sets m.totalBase & m.totalOtHours
 
-            double effectiveOtPay = m.otPayFromDailyRates(); // (dailyWage/8)*otHours per day, summed
+            var line = byMember.get(mid);
+            if (line == null) {
+                line = PayrollLine.builder()
+                        .teamMemberId(mid)
+                        .teamMemberName(m.getName())
+                        .build();
+                week.addLine(line); // sets back-ref; relies on cascade on PayrollWeek.lines
+                byMember.put(mid, line);
+            } else if (line.getTeamMemberName() == null || line.getTeamMemberName().isBlank()) {
+                line.setTeamMemberName(m.getName());
+            }
 
-            var line = PayrollLine.builder()
-                    .teamMemberId(mid)
-                    .teamMemberName(m.name)
-                    .baseWages(m.totalBase)
-                    .computedOtHours(m.totalOtHours)
-                    .computedOtPay(effectiveOtPay)
-                    .effectiveOtPay(effectiveOtPay)
-                    .finalTotal(m.totalBase + effectiveOtPay)
-                    .build();
-
-            week.addLine(line); // sets back-reference
-
-            tBase  += num(line.getBaseWages());
-            tOt    += num(line.getEffectiveOtPay());
-            tTotal += num(line.getFinalTotal());
+            line.setBaseWages(m.getTotalBase());
+            line.setComputedOtHours(m.getTotalOtHours());
+            line.setComputedOtPay(effOtPayFromDays);
+            touched.add(mid);
         }
 
-        week.setTotalBase(tBase);
-        week.setTotalOtPay(tOt);
-        week.setTotalAdjustments(tAdj);
-        week.setTotalToPay(tTotal);
+        // Zero computed parts for members not touched this week (keep overrides/adjustments)
+        if (week.getLines() != null) {
+            for (var l : week.getLines()) {
+                if (!touched.contains(l.getTeamMemberId())) {
+                    l.setBaseWages(0d);
+                    l.setComputedOtHours(0d);
+                    l.setComputedOtPay(0d);
+                }
+            }
+        }
 
-        var saved = weekRepo.saveAndFlush(week);  // ensure IDs now
-        return mapper.toDTO(saved);
+        // Recompute effective OT with canonical hourly fallback (same rule as finalizeWeek)
+        var hourlyByMid = canonicalHourlyByMember(start, end);
+        if (week.getLines() != null) {
+            for (var l : week.getLines()) {
+                if (num(l.getComputedOtHours()) > 0 && num(l.getComputedOtPay()) == 0) {
+                    double hourly = hourlyByMid.getOrDefault(l.getTeamMemberId(), 0.0);
+                    l.setComputedOtPay(hourly * l.getComputedOtHours());
+                }
+                recalcLineWithHourly(l, hourlyByMid);
+            }
+        }
     }
 
     @Transactional
@@ -390,3 +425,27 @@ public class PayrollService {
 
     private static double num(Double v) { return v == null ? 0.0 : v; }
 }
+
+/*
+**fix(payroll): upsert lines on week load so draft weeks return real line IDs**
+
+        * Change `generateOrLoad(...)` to **load-or-create** the week and, when `DRAFT`,
+        **upsert payroll lines from current Sat→Thu assignments**.
+        * New helper `upsertLinesFromAssignments(...)`:
+
+        * aggregates per-member, creates/matches `PayrollLine`s,
+        * preserves adjustments and OT overrides,
+        * zeros computed parts for untouched members,
+  * recomputes effective OT with canonical-hourly fallback,
+  * calls `recalcWeek(...)` and updates `updatedAt`.
+        * Return the saved week DTO with populated `lines`.
+
+        **Why:** existing `generateOrLoad` returned an empty `lines` array when the week
+existed but had been created before assignments. The UI then produced `tmp-*`
+rows with no backend `line.id`, keeping **Apply** / **Add adjustment** disabled.
+
+No API changes; `finalizeWeek(...)` unchanged.
+
+        Follow-ups suggested: add `UNIQUE (payroll_week_id, team_member_id)` and keep
+entity cascade/back-ref as configured.
+*/
