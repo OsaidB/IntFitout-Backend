@@ -29,6 +29,9 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.List;
+// add these imports
+import com.openhtmltopdf.bidi.support.ICUBidiReorderer;
+import com.openhtmltopdf.bidi.support.ICUBidiSplitter;
 
 @Service
 @RequiredArgsConstructor
@@ -113,7 +116,7 @@ public class InvoiceReceivingService {
     private String buildHtml(InvoiceReceivingDTO m, String lang) {
         String dir = "ar".equalsIgnoreCase(lang) ? "rtl" : "ltr";
         String langCode = (lang == null ? "ar" : lang);
-        String title = "ar".equalsIgnoreCase(lang) ? "تأكيد استلام مواد – بدون أسعار"
+        String title = "ar".equalsIgnoreCase(lang) ? "تأكيد استلام مواد"
                 : "Receiving Checklist – No Prices";
 
         String dateStr = "";
@@ -130,7 +133,7 @@ public class InvoiceReceivingService {
                     .append("<td class='idx'>").append(it.getIndex()).append("</td>")
                     .append("<td class='name'>").append(esc(it.getName())).append("</td>")
                     .append("<td class='qty'>").append(fmtQty(it.getQty())).append("</td>")
-                    .append("<td class='unit'>").append(esc(it.getUnit())).append("</td>")
+//                    .append("<td class='unit'>").append(esc(it.getUnit())).append("</td>")
                     .append("</tr>\n");
         }
 
@@ -159,14 +162,12 @@ public class InvoiceReceivingService {
                 "  <div class=\"meta\">الموقع: <b>" + esc(nz(m.getMasterWorksiteName())) + "</b> | " +
                 "التاريخ: " + esc(nz(dateStr)) + "</div>\n" +
                 "  <div class=\"meta\">رقم الفاتورة: " + (m.getInvoiceId() == null ? "-" : m.getInvoiceId()) + "</div>\n" +
-                "  <div class=\"note\">ملاحظة: هذه القائمة لا تحتوي على أسعار.</div>\n" +
                 "  <table>\n" +
                 "    <thead>\n" +
                 "      <tr>\n" +
                 "        <th class=\"idx\">#</th>\n" +
                 "        <th class=\"name\">الصنف</th>\n" +
                 "        <th class=\"qty\">الكمية</th>\n" +
-                "        <th class=\"unit\">الوحدة</th>\n" +
                 "      </tr>\n" +
                 "    </thead>\n" +
                 "    <tbody>\n" +
@@ -181,6 +182,11 @@ public class InvoiceReceivingService {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
             PdfRendererBuilder b = new PdfRendererBuilder();
             b.useFastMode();
+
+            // ✅ Enable Arabic bidi/shaping (requires openhtmltopdf-rtl-support + icu4j)
+            b.useUnicodeBidiSplitter(new ICUBidiSplitter.ICUBidiSplitterFactory());
+            b.useUnicodeBidiReorderer(new ICUBidiReorderer());
+
             b.withHtmlContent(html, null);
             b.toStream(baos);
             b.run();
@@ -189,6 +195,9 @@ public class InvoiceReceivingService {
             throw new RuntimeException("Failed to render PDF", e);
         }
     }
+
+
+
 
     private List<BufferedImage> pdfToImagesScaled(byte[] pdfBytes) {
         List<BufferedImage> pages = new ArrayList<>();

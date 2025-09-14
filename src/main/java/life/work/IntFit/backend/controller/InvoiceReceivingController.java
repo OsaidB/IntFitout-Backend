@@ -28,7 +28,7 @@ public class InvoiceReceivingController {
     }
 
     @GetMapping("/{id}/receiving-images")
-    public Map<String, Object> receivingImages(@PathVariable Long id,
+    public Map<String, Object> r(@PathVariable Long id,
                                                @RequestParam(defaultValue = "ar") String lang) {
         var dto = service.loadSanitized(id);
         var imgs = service.renderImages(dto, lang);
