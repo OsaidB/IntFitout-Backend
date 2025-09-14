@@ -46,7 +46,7 @@
 		<dependency>
 			<groupId>com.ibm.icu</groupId>
 			<artifactId>icu4j</artifactId>
-			<version>74.1</version> <!-- Use the latest version -->
+			<version>77.1</version> <!-- Use the latest version -->
 		</dependency>
 
 		<!-- Apache PDFBox for PDF Parsing -->
@@ -200,12 +200,32 @@
 <!--		</dependency>-->
 
 
-		<!-- HTML -> PDF (great RTL support) -->
+		<!-- already have this -->
 		<dependency>
 			<groupId>com.openhtmltopdf</groupId>
 			<artifactId>openhtmltopdf-pdfbox</artifactId>
 			<version>1.0.10</version>
 		</dependency>
+
+		<!-- NEW: bidi/shaping support -->
+		<dependency>
+			<groupId>com.openhtmltopdf</groupId>
+			<artifactId>openhtmltopdf-rtl-support</artifactId>
+			<version>1.0.10</version>
+		</dependency>
+<!--		<dependency>-->
+<!--			<groupId>com.ibm.icu</groupId>-->
+<!--			<artifactId>icu4j</artifactId>-->
+<!--			<version>73.2</version>-->
+<!--		</dependency>-->
+
+
+		<!-- HTML -> PDF (great RTL support) -->
+<!--		<dependency>-->
+<!--			<groupId>com.openhtmltopdf</groupId>-->
+<!--			<artifactId>openhtmltopdf-pdfbox</artifactId>-->
+<!--			<version>1.0.10</version>-->
+<!--		</dependency>-->
 
 		<!-- PDF rasterization to PNG -->
 		<dependency>
