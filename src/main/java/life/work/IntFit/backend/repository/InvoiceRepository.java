@@ -70,4 +70,7 @@ public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
             @Param("to")   LocalDateTime to
     );
 
+
+    @EntityGraph(attributePaths = { "items", "worksite", "worksite.masterWorksite" })
+    Optional<Invoice> findById(Long id);
 }
