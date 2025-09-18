@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.time.LocalDate;
+import java.math.BigDecimal;
 
 @Entity
 @Getter
@@ -17,7 +18,8 @@ public class BankCheck {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    private double amount;
+    @Column(nullable = false, precision = 12, scale = 2)
+    private BigDecimal amount;
 
     private LocalDate dueDate;
 
@@ -32,5 +34,9 @@ public class BankCheck {
 
     @Column
     private String serialNumber;
+
+    // ⬇️ NEW
+    @Column(length = 512)
+    private String imageUrl;
 
 }
