@@ -18,4 +18,10 @@ public interface ArPaymentRepository extends JpaRepository<ArPayment, Long> {
 
     @Query("select coalesce(sum(a.amount), 0) from ArPaymentAllocation a where a.payment.id = :paymentId")
     BigDecimal sumAllocationsForPayment(Long paymentId);
+
+    // File: repository/ArPaymentRepository.java
+// (add this extra finder)
+    List<ArPayment> findByDateBetween(LocalDate from, LocalDate to);
+
+
 }

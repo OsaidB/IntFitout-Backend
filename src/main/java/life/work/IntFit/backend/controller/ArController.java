@@ -10,6 +10,8 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
 import java.util.List;
+import life.work.IntFit.backend.dto.ArPaymentDTO;
+import life.work.IntFit.backend.dto.CreatePaymentDTO;
 
 @RestController
 @RequestMapping("/api/ar")
@@ -39,4 +41,21 @@ public class ArController {
     public void allocate(@PathVariable Long paymentId, @RequestBody AllocateRequestDTO body) {
         arService.allocatePayment(paymentId, body);
     }
+
+    @PostMapping("/payments")
+    public ArPaymentDTO createPayment(@RequestBody CreatePaymentDTO body) {
+        return arService.createPayment(body);
+    }
+
+    @GetMapping("/payments")
+    public List<ArPaymentDTO> listPayments(
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) Long masterWorksiteId
+    ) {
+        return arService.listPayments(from, to, masterWorksiteId);
+    }
+
+
+
 }

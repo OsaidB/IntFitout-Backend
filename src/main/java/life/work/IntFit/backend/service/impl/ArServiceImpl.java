@@ -19,6 +19,8 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
+import life.work.IntFit.backend.dto.ArPaymentDTO;
+import life.work.IntFit.backend.dto.CreatePaymentDTO;
 
 @Service
 public class ArServiceImpl implements ArService {
@@ -188,4 +190,50 @@ public class ArServiceImpl implements ArService {
     private static String safeDateIso(Invoice inv) {
         return inv.getDate() == null ? null : inv.getDate().toLocalDate().toString();
     }
+
+
+    @Override
+    public ArPaymentDTO createPayment(CreatePaymentDTO b) {
+        if (b == null || b.masterWorksiteId == null || b.amount == null || b.dateISO == null)
+            throw bad("masterWorksiteId, amount, dateISO are required");
+
+        ArPayment p = ArPayment.builder()
+                .masterWorksiteId(b.masterWorksiteId)
+                .amount(b.amount)
+                .date(LocalDate.parse(b.dateISO))
+                .method(b.method)
+                .reference(b.reference)
+                .notes(b.notes)
+                .build();
+        p = paymentRepo.save(p);
+        return toDto(p);
+    }
+
+    @Override
+    public List<ArPaymentDTO> listPayments(LocalDate from, LocalDate to, Long masterWorksiteId) {
+        if (from == null || to == null || !to.isAfter(from)) throw bad("Invalid date range");
+        List<ArPayment> rows = (masterWorksiteId != null)
+                ? paymentRepo.findByMasterWorksiteIdAndDateBetween(masterWorksiteId, from, to.minusDays(0))
+                : paymentRepo.findByDateBetween(from, to.minusDays(0));
+        List<ArPaymentDTO> out = new ArrayList<>();
+        for (ArPayment p : rows) out.add(toDto(p));
+        return out;
+    }
+
+    private static ArPaymentDTO toDto(ArPayment p) {
+        ArPaymentDTO d = new ArPaymentDTO();
+        d.id = p.getId();
+        d.masterWorksiteId = p.getMasterWorksiteId();
+        d.dateISO = p.getDate() != null ? p.getDate().toString() : null;
+        d.amount = p.getAmount();
+        d.method = p.getMethod();
+        d.reference = p.getReference();
+        d.notes = p.getNotes();
+        d.createdAt = p.getCreatedAt() != null ? p.getCreatedAt().toString() : null;
+        return d;
+    }
+
+
+
+
 }
