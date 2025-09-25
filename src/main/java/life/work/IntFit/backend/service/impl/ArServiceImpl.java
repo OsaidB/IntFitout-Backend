@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 import life.work.IntFit.backend.dto.ArPaymentDTO;
 import life.work.IntFit.backend.dto.CreatePaymentDTO;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class ArServiceImpl implements ArService {
@@ -39,39 +40,40 @@ public class ArServiceImpl implements ArService {
         this.allocRepo   = allocRepo;
     }
 
+
     @Override
+    @Transactional(readOnly = true)   // ✅ keep session while building DTO
     public StatementDTO getStatement(Long masterWorksiteId, LocalDate from, LocalDate to) {
-        if (masterWorksiteId == null) {
-            throw bad("masterWorksiteId is required");
-        }
-        if (from == null || to == null || !to.isAfter(from) ) {
-            throw bad("Invalid date range");
-        }
+        if (masterWorksiteId == null) throw bad("masterWorksiteId is required");
+        if (from == null || to == null || !to.isAfter(from)) throw bad("Invalid date range");
+
         final LocalDateTime fromDt = from.atStartOfDay();
-        final LocalDateTime toDt   = LocalDateTime.of(to, LocalTime.MIDNIGHT); // [from, to)
+        final LocalDateTime toDt   = to.atStartOfDay(); // [from, to)
 
         StatementDTO out = new StatementDTO();
 
         BigDecimal invBefore = nz(invoiceRepo.sumTotalsBeforeMaster(masterWorksiteId, fromDt));
-        BigDecimal payBefore = nz(paymentRepo.sumByMasterAndDateBefore(masterWorksiteId, from.minusDays(0)));
+        BigDecimal payBefore = nz(paymentRepo.sumByMasterAndDateBefore(masterWorksiteId, from));
         out.openingBalance = invBefore.subtract(payBefore);
 
-        // Invoices in range, compute paid/remaining as of 'to'
+        // invoices (unchanged)
         List<Invoice> inRange = invoiceRepo.findByMasterBetween(masterWorksiteId, fromDt, toDt);
         for (Invoice inv : inRange) {
             StatementInvoiceDTO line = new StatementInvoiceDTO();
             line.id = inv.getId();
-            line.number = "INV-" + inv.getId();             // your entity has no 'number' field
+            line.number = "INV-" + inv.getId();
             line.dateISO = safeDateIso(inv);
-            line.total = money(inv);                         // <-- convert Double -> BigDecimal
-            BigDecimal paid = nz(allocRepo.sumAllocationsForInvoiceAsOf(inv.getId(), to));
+            line.total = money(inv);
+            BigDecimal paid = nz(allocRepo.sumAllocationsForInvoiceAsOf(inv.getId(), to.minusDays(0)));
             line.paid = paid;
             line.remaining = maxZero(line.total.subtract(paid));
             out.invoices.add(line);
         }
 
-        // Payments in range
-        List<ArPayment> pays = paymentRepo.findByMasterWorksiteIdAndDateBetween(masterWorksiteId, from, to.minusDays(0));
+        // ✅ payments WITH allocations pre-fetched (no LazyInitializationException)
+        List<ArPayment> pays = paymentRepo.findWithAllocationsByMasterAndDateRange(
+                masterWorksiteId, from, to  // to is exclusive by design here
+        );
         for (ArPayment p : pays) {
             StatementPaymentDTO pl = new StatementPaymentDTO();
             pl.id = p.getId();
@@ -80,13 +82,15 @@ public class ArServiceImpl implements ArService {
             pl.method = p.getMethod();
             pl.reference = p.getReference();
             pl.notes = p.getNotes();
+
+            // allocations are initialized because of the fetch-join above
             if (p.getAllocations() != null) {
-                for (ArPaymentAllocation a : p.getAllocations()) {
+                p.getAllocations().forEach(a -> {
                     StatementPaymentAllocationDTO al = new StatementPaymentAllocationDTO();
                     al.invoiceId = a.getInvoiceId();
                     al.amount = nz(a.getAmount());
                     pl.allocations.add(al);
-                }
+                });
             }
             out.payments.add(pl);
         }
@@ -96,6 +100,7 @@ public class ArServiceImpl implements ArService {
     }
 
     @Override
+    @Transactional(readOnly = true)   // also safe for reads
     public List<StatementInvoiceDTO> getOpenInvoices(Long masterWorksiteId, LocalDate asOf) {
         if (masterWorksiteId == null) throw bad("masterWorksiteId is required");
         if (asOf == null) asOf = LocalDate.now();
@@ -123,6 +128,7 @@ public class ArServiceImpl implements ArService {
     }
 
     @Override
+    @Transactional                     // writes need a tx
     public void allocatePayment(Long paymentId, AllocateRequestDTO body) {
         ArPayment payment = paymentRepo.findById(paymentId)
                 .orElseThrow(() -> notFound("Payment not found"));
