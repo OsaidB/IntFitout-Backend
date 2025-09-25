@@ -12,6 +12,9 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
 @Repository
 public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
 
@@ -73,4 +76,55 @@ public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
 
     @EntityGraph(attributePaths = { "items", "worksite", "worksite.masterWorksite" })
     Optional<Invoice> findById(Long id);
+
+
+
+    /**
+     * Sum of invoice totals (coalesce(total, netTotal)) for a master worksite
+     * strictly BEFORE the given datetime.
+     */
+    @Query("""
+        select coalesce(sum(coalesce(i.total, i.netTotal)), 0)
+        from Invoice i
+        where i.worksite.masterWorksite.id = :masterId
+          and i.date < :before
+    """)
+    BigDecimal sumTotalsBeforeMaster(
+            @Param("masterId") Long masterWorksiteId,
+            @Param("before") LocalDateTime before
+    );
+
+    /**
+     * Invoices in [from, to) for statement building (ordered asc).
+     * (We don't fetch items/materials here to keep it lightweight.)
+     */
+    @Query("""
+        select i
+        from Invoice i
+        where i.worksite.masterWorksite.id = :masterId
+          and i.date >= :from and i.date < :to
+        order by i.date asc, i.id asc
+    """)
+    List<Invoice> findByMasterBetween(
+            @Param("masterId") Long masterWorksiteId,
+            @Param("from") LocalDateTime from,
+            @Param("to")   LocalDateTime to
+    );
+
+    /**
+     * All invoices up to and including asOf (for open-balance checks).
+     */
+    @Query("""
+        select i
+        from Invoice i
+        where i.worksite.masterWorksite.id = :masterId
+          and i.date <= :asOf
+        order by i.date asc, i.id asc
+    """)
+    List<Invoice> findAllByMasterUpTo(
+            @Param("masterId") Long masterWorksiteId,
+            @Param("asOf") LocalDateTime asOf
+    );
+
+
 }
