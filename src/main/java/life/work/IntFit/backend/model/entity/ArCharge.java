@@ -5,6 +5,10 @@ import lombok.*;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+
+import org.hibernate.annotations.CreationTimestamp;
+import jakarta.persistence.PrePersist;
 
 @Entity
 @Table(name = "ar_charge")
@@ -25,6 +29,13 @@ public class ArCharge {
     @Column(nullable=false, precision=12, scale=2)
     private BigDecimal amount;
 
-    @Column(name="created_at", nullable=false)
-    private Instant createdAt = Instant.now();
+    @CreationTimestamp
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private LocalDateTime createdAt;
+
+    @PrePersist
+    void prePersist() {
+        if (createdAt == null) createdAt = LocalDateTime.now(); // safety net
+        if (date == null) date = LocalDate.now();               // optional: ensure date
+    }
 }
