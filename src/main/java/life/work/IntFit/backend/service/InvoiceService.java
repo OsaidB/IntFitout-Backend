@@ -141,5 +141,24 @@ public class InvoiceService {
         return input.replaceAll("\\s+", " ").trim().toLowerCase();
     }
 
+    @Transactional
+    public InvoiceDTO changeInvoiceWorksite(Long invoiceId, Long worksiteId) {
+        Invoice invoice = invoiceRepository.findById(invoiceId)
+                .orElseThrow(() -> new IllegalArgumentException("Invoice not found: " + invoiceId));
+
+        Worksite ws = worksiteRepository.findById(worksiteId)
+                .orElseThrow(() -> new IllegalArgumentException("Worksite not found: " + worksiteId));
+
+        // Link the new worksite
+        invoice.setWorksite(ws);
+
+        // Keep denormalized name in sync (if you use it for filtering/search)
+        // If your Worksite names are normalized, this will be normalized too.
+        invoice.setWorksiteName(ws.getName());
+
+        Invoice saved = invoiceRepository.save(invoice);
+        return invoiceMapper.toDTO(saved);
+    }
+
 
 }

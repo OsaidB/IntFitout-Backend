@@ -1,5 +1,6 @@
 package life.work.IntFit.backend.controller;
 
+import life.work.IntFit.backend.dto.ChangeWorksiteDTO;
 import life.work.IntFit.backend.dto.InvoiceDTO;
 import life.work.IntFit.backend.dto.PendingInvoiceDTO;
 import life.work.IntFit.backend.dto.SmsMessageDTO;
@@ -169,4 +170,28 @@ public class InvoiceController {
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.ok(""));
     }
+
+
+    // PUT /api/invoices/{id}/worksite   with body: { "worksiteId": 123 }
+    @PutMapping("/{id}/worksite")
+    public ResponseEntity<InvoiceDTO> changeInvoiceWorksite(
+            @PathVariable Long id,
+            @RequestBody ChangeWorksiteDTO body
+    ) {
+        if (body == null || body.getWorksiteId() == null) {
+            return ResponseEntity.badRequest().build();
+        }
+        return ResponseEntity.ok(invoiceService.changeInvoiceWorksite(id, body.getWorksiteId()));
+    }
+
+    // PUT /api/invoices/{id}/worksite/{worksiteId}
+    @PutMapping("/{id}/worksite/{worksiteId}")
+    public ResponseEntity<InvoiceDTO> changeInvoiceWorksitePath(
+            @PathVariable Long id,
+            @PathVariable Long worksiteId
+    ) {
+        return ResponseEntity.ok(invoiceService.changeInvoiceWorksite(id, worksiteId));
+    }
+
+
 }
