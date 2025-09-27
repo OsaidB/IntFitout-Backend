@@ -56,4 +56,14 @@ public class StatusMessageController {
                 .map(m -> ResponseEntity.ok(m.getReceivedAt().toString())) // e.g. 2025-08-27T09:41:12.345+03:00 or Z
                 .orElseGet(() -> ResponseEntity.ok("")); // frontend treats "" as null
     }
+
+    // inside StatusMessageController
+
+    // 🔹 NEW: latest 20 status messages (most recent first)
+    @GetMapping("/latest-20")
+    public ResponseEntity<List<StatusMessage>> getLatest20() {
+        List<StatusMessage> messages = statusMessageRepository.findTop20ByOrderByReceivedAtDesc();
+        return ResponseEntity.ok(messages);
+    }
+
 }
