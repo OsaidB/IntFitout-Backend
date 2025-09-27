@@ -22,14 +22,15 @@ public class ArPaymentAllocation {
     private Long id;
 
     // FK to ArPayment
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+// fields...
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "payment_id", nullable = false)
     private ArPayment payment;
 
-    // We only need invoice id (keep loose coupling)
-    @Column(name = "invoice_id", nullable = false)
-    private Long invoiceId;
+    @Column(name = "charge_id", nullable = false)
+    private Long chargeId;
 
-    @Column(name = "amount", nullable = false, precision = 19, scale = 2)
+    @Column(nullable = false, precision = 12, scale = 2)
     private BigDecimal amount;
+
 }

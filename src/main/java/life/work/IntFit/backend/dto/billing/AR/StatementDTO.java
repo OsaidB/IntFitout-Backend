@@ -1,4 +1,4 @@
-package life.work.IntFit.backend.dto;
+package life.work.IntFit.backend.dto.billing.AR;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -6,8 +6,8 @@ import java.util.List;
 
 public class StatementDTO {
     public BigDecimal openingBalance = BigDecimal.ZERO;
-    public BigDecimal adjustments = BigDecimal.ZERO; // future: credit notes etc.
+    public BigDecimal adjustments = BigDecimal.ZERO; // future
 
-    public List<StatementInvoiceDTO> invoices = new ArrayList<>();
+    public List<StatementChargeDTO> charges = new ArrayList<>();
     public List<StatementPaymentDTO> payments = new ArrayList<>();
 }

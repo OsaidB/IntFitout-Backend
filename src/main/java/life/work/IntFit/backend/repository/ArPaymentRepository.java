@@ -8,10 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
-import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
-import java.time.LocalDate;
-import java.util.List;
 
 public interface ArPaymentRepository extends JpaRepository<ArPayment, Long> {
 
@@ -44,5 +41,21 @@ public interface ArPaymentRepository extends JpaRepository<ArPayment, Long> {
 
     List<ArPayment> findByDateBetween(LocalDate from, LocalDate to);
 
+    @Query("""
+      select coalesce(sum(p.amount),0)
+      from ArPayment p
+      where p.masterWorksiteId = :mid and p.date < :before
+    """)
+    BigDecimal sumBefore(@Param("mid") Long masterId,
+                         @Param("before") java.time.LocalDate before);
+
+    @Query("""
+      select p from ArPayment p
+      where p.masterWorksiteId = :mid and p.date >= :from and p.date < :toEx
+      order by p.date asc, p.id asc
+    """)
+    List<ArPayment> findInRange(@Param("mid") Long masterId,
+                                @Param("from") java.time.LocalDate from,
+                                @Param("toEx") java.time.LocalDate toExclusive);
 
 }

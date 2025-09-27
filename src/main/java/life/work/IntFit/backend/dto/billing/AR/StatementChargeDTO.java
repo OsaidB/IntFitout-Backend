@@ -1,12 +1,12 @@
-package life.work.IntFit.backend.dto;
+package life.work.IntFit.backend.dto.billing.AR;
 
 import java.math.BigDecimal;
 
-public class StatementInvoiceDTO {
+public class StatementChargeDTO {
     public Long id;
-    public String number;
     public String dateISO;
-    public BigDecimal total = BigDecimal.ZERO;
+    public String description;
+    public BigDecimal amount = BigDecimal.ZERO;
     public BigDecimal paid = BigDecimal.ZERO;
     public BigDecimal remaining = BigDecimal.ZERO;
 }

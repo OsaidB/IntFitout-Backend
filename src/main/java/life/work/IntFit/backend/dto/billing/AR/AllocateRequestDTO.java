@@ -1,4 +1,4 @@
-package life.work.IntFit.backend.dto;
+package life.work.IntFit.backend.dto.billing.AR;
 
 import java.math.BigDecimal;
 import java.util.List;
