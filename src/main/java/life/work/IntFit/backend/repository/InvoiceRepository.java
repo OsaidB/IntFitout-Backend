@@ -127,4 +127,12 @@ public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
     );
 
 
+    // Earliest invoice under a given MasterWorksite (by i.date ASC)
+    @EntityGraph(attributePaths = {"worksite", "worksite.masterWorksite"})
+    Optional<Invoice> findFirstByWorksite_MasterWorksite_IdOrderByDateAsc(Long masterWorksiteId);
+
+// (If your Invoice already has a direct masterWorksite field, you could instead use:)
+// @EntityGraph(attributePaths = {"worksite", "worksite.masterWorksite"})
+// Optional<Invoice> findFirstByMasterWorksite_IdOrderByDateAsc(Long masterWorksiteId);
+
 }
