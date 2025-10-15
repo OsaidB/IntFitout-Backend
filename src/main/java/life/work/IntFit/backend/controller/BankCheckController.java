@@ -1,10 +1,9 @@
 package life.work.IntFit.backend.controller;
 
 import life.work.IntFit.backend.dto.BankCheckDTO;
+import life.work.IntFit.backend.exception.error.BadRequestException;
 import life.work.IntFit.backend.service.BankCheckService;
 import life.work.IntFit.backend.service.FileStorageService;
-import life.work.IntFit.backend.exception.error.BadRequestException;
-import life.work.IntFit.backend.exception.error.NotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -14,10 +13,10 @@ import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.net.URI;
-import java.time.*;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -39,31 +38,38 @@ public class BankCheckController {
      *   - cleared=[true|false]
      *   - from=YYYY-MM-DD (inclusive)
      *   - to=YYYY-MM-DD   (inclusive)
+     *   - recipient=<substring, case-insensitive>
+     *   - issuerPersonal=[true|false]
+     *   - masterId=<source master worksite id>
      * Always sorted by dueDate ASC (nulls last), then id ASC.
      */
     @GetMapping
     public List<BankCheckDTO> getAll(
             @RequestParam(required = false) Boolean cleared,
             @RequestParam(required = false) String from,
-            @RequestParam(required = false) String to
+            @RequestParam(required = false) String to,
+            @RequestParam(required = false) String recipient,
+            @RequestParam(required = false, name = "issuerPersonal") Boolean issuerPersonal,
+            @RequestParam(required = false, name = "masterId") Long masterId
     ) {
         LocalDate fromDate = parseDateOrNull(from);
         LocalDate toDate   = parseDateOrNull(to);
 
-        return service.getAll().stream()
-                .filter(c -> cleared == null || c.isCleared() == cleared)
-                .filter(c -> {
-                    if (c.getDueDate() == null) return true;
-                    boolean ok = true;
-                    if (fromDate != null) ok = ok && !c.getDueDate().isBefore(fromDate);
-                    if (toDate != null)   ok = ok && !c.getDueDate().isAfter(toDate);
-                    return ok;
-                })
+        return service.getAll(cleared, fromDate, toDate).stream()
+                .filter(c -> recipient == null || containsIgnoreCase(c.getRecipientName(), recipient))
+                .filter(c -> issuerPersonal == null || Boolean.TRUE.equals(c.getPersonalIssuer()) == issuerPersonal)
+                .filter(c -> masterId == null || Objects.equals(c.getSourceMasterWorksiteId(), masterId))
                 .sorted(Comparator
                         .comparing(BankCheckDTO::getDueDate, Comparator.nullsLast(Comparator.naturalOrder()))
                         .thenComparing(BankCheckDTO::getId, Comparator.nullsLast(Comparator.naturalOrder()))
                 )
                 .collect(Collectors.toList());
+    }
+
+    /** GET /api/bank-checks/{id} */
+    @GetMapping("/{id}")
+    public BankCheckDTO getOne(@PathVariable Long id) {
+        return service.getById(id);
     }
 
     /**
@@ -81,26 +87,19 @@ public class BankCheckController {
         return ResponseEntity.created(location).body(saved);
     }
 
+    /** PATCH /api/bank-checks/{id} (partial update) */
+    @PatchMapping("/{id}")
+    public BankCheckDTO patch(@PathVariable Long id, @RequestBody BankCheckDTO patch) {
+        // amount/dueDate/recipientName can be omitted in patch (mapper ignores nulls)
+        return service.update(id, patch);
+    }
+
     /**
      * DELETE /api/bank-checks/{id}
-     * Also tries to delete the associated image from storage if imageUrl is present.
+     * (File deletion is handled in the service.)
      */
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
-        // Best-effort fetch to clean up file
-        BankCheckDTO current = null;
-        try {
-            // If you have service.getById(id), use it; otherwise fallback to scan.
-            current = service.getAll().stream()
-                    .filter(c -> Objects.equals(c.getId(), id))
-                    .findFirst()
-                    .orElse(null);
-        } catch (Exception ignored) {}
-
-        if (current != null && current.getImageUrl() != null) {
-            storage.deleteCheckImageByPublicUrl(current.getImageUrl());
-        }
-
         service.delete(id);
         return ResponseEntity.noContent().build();
     }
@@ -122,43 +121,15 @@ public class BankCheckController {
 
     /**
      * GET /api/bank-checks/stats
-     * Returns simple aggregates for your dashboard (today’s tz = Asia/Hebron):
-     *  {
-     *    "now": "2025-09-18",
-     *    "count": 12,
-     *    "overdueCount": 3,
-     *    "dueSoonCount": 2,  // 0..3 days
-     *    "sumAll": "12345.00",
-     *    "sumOverdue": "4000.00",
-     *    "sumDueSoon": "1500.00"
-     *  }
+     * Delegates to service.stats() which includes:
+     *  - now, count, overdueCount, dueSoonCount, sums
+     *  - sumToEtimadNonPersonal (deduct now)
+     *  - sumToEtimadPersonal    (do NOT deduct)
+     *  - sumToOthers
      */
     @GetMapping("/stats")
     public Map<String, Object> stats() {
-        LocalDate today = LocalDate.now(HEBRON_TZ);
-
-        List<BankCheckDTO> all = service.getAll();
-        BigDecimal sumAll = sum(all);
-
-        List<BankCheckDTO> overdue = all.stream()
-                .filter(c -> isOverdue(c.getDueDate(), today))
-                .toList();
-        BigDecimal sumOverdue = sum(overdue);
-
-        List<BankCheckDTO> dueSoon = all.stream()
-                .filter(c -> isDueSoon(c.getDueDate(), today, 3))
-                .toList();
-        BigDecimal sumDueSoon = sum(dueSoon);
-
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("now", today.toString());
-        m.put("count", all.size());
-        m.put("overdueCount", overdue.size());
-        m.put("dueSoonCount", dueSoon.size());
-        m.put("sumAll", sumAll.toPlainString());
-        m.put("sumOverdue", sumOverdue.toPlainString());
-        m.put("sumDueSoon", sumDueSoon.toPlainString());
-        return m;
+        return service.stats();
     }
 
     // ---------------------- helpers ----------------------
@@ -169,6 +140,7 @@ public class BankCheckController {
         if (dto.getDueDate() == null) throw new BadRequestException("dueDate is required");
         if (dto.getRecipientName() == null || dto.getRecipientName().isBlank())
             throw new BadRequestException("recipientName is required");
+        // issuer/worksite are optional by design
     }
 
     private LocalDate parseDateOrNull(String s) {
@@ -180,16 +152,26 @@ public class BankCheckController {
         }
     }
 
+    private boolean containsIgnoreCase(String haystack, String needle) {
+        if (needle == null || needle.isBlank()) return true;
+        if (haystack == null) return false;
+        return haystack.toLowerCase(Locale.ROOT).contains(needle.toLowerCase(Locale.ROOT));
+    }
+
+    // Keeping these for any potential reuse (if you revert to local stats calc):
+    @SuppressWarnings("unused")
     private boolean isOverdue(LocalDate due, LocalDate today) {
         return due != null && due.isBefore(today);
     }
 
+    @SuppressWarnings("unused")
     private boolean isDueSoon(LocalDate due, LocalDate today, int days) {
         if (due == null) return false;
-        long d = ChronoUnit.DAYS.between(today, due);
+        long d = java.time.temporal.ChronoUnit.DAYS.between(today, due);
         return d >= 0 && d <= days;
     }
 
+    @SuppressWarnings("unused")
     private BigDecimal sum(Collection<BankCheckDTO> items) {
         return items.stream()
                 .map(c -> c.getAmount() == null ? BigDecimal.ZERO : c.getAmount())

@@ -9,6 +9,8 @@ import life.work.IntFit.backend.repository.BankCheckRepository;
 import life.work.IntFit.backend.service.BankCheckService;
 import life.work.IntFit.backend.service.FileStorageService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,6 +31,7 @@ public class BankCheckServiceImpl implements BankCheckService {
     private static final ZoneId HEBRON_TZ = ZoneId.of("Asia/Hebron");
 
     private final BankCheckRepository repo;
+    @Qualifier("bankCheckMapperImpl")   // 👈 pick the generated bean
     private final BankCheckMapper mapper;
     private final FileStorageService storage;
 
@@ -74,6 +77,13 @@ public class BankCheckServiceImpl implements BankCheckService {
 
         BankCheck entity = mapper.toEntity(dto);
         entity.setId(null);
+
+        // Back-compat: infer personalIssuer from legacy "fromWhom" when needed
+        applyBackCompatPersonal(entity);
+
+        // Optional: snapshot master worksite name for fast UI without joins
+        snapshotWorksiteName(entity);
+
         normalizeAmount(entity);       // <-- scale(2)
         validateInvariant(entity);     // <-- BigDecimal checks
 
@@ -91,6 +101,12 @@ public class BankCheckServiceImpl implements BankCheckService {
 
         // Apply only non-null fields from DTO
         mapper.update(entity, patch);
+
+        // Back-compat again after PATCH
+        applyBackCompatPersonal(entity);
+
+        // Maintain snapshot if relation/name was provided/changed
+        snapshotWorksiteName(entity);
 
         // bring amount to 2 decimals if present
         normalizeAmount(entity);
@@ -135,6 +151,24 @@ public class BankCheckServiceImpl implements BankCheckService {
                 .toList();
         BigDecimal sumDueSoon = sum(dueSoon);
 
+        // ----- NEW: Dashboard impact (Al-Etimad rule) -----
+        BigDecimal toEtimadPersonal = BigDecimal.ZERO;
+        BigDecimal toEtimadNonPersonal = BigDecimal.ZERO;
+        BigDecimal toOthers = BigDecimal.ZERO;
+
+        for (BankCheckDTO c : all) {
+            BigDecimal amt = c.getAmount() == null ? BigDecimal.ZERO : c.getAmount();
+            if (amt.signum() == 0) continue;
+
+            boolean personal = Boolean.TRUE.equals(c.getPersonalIssuer()); // DTO is Boolean
+            if (isAlEtimad(c.getRecipientName())) {
+                if (personal) toEtimadPersonal = toEtimadPersonal.add(amt);
+                else          toEtimadNonPersonal = toEtimadNonPersonal.add(amt);
+            } else {
+                toOthers = toOthers.add(amt);
+            }
+        }
+
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("now", today.toString());
         m.put("count", all.size());
@@ -143,6 +177,12 @@ public class BankCheckServiceImpl implements BankCheckService {
         m.put("sumAll", sumAll.toPlainString());
         m.put("sumOverdue", sumOverdue.toPlainString());
         m.put("sumDueSoon", sumDueSoon.toPlainString());
+
+        // Impact metrics (used by your UI cards)
+        m.put("sumToEtimadNonPersonal", toEtimadNonPersonal.setScale(2, RoundingMode.HALF_UP).toPlainString()); // deduct now
+        m.put("sumToEtimadPersonal",    toEtimadPersonal.setScale(2, RoundingMode.HALF_UP).toPlainString());     // do not deduct
+        m.put("sumToOthers",            toOthers.setScale(2, RoundingMode.HALF_UP).toPlainString());
+
         return m;
     }
 
@@ -161,6 +201,7 @@ public class BankCheckServiceImpl implements BankCheckService {
         if (dto.getDueDate() == null) throw new BadRequestException("dueDate is required");
         if (dto.getRecipientName() == null || dto.getRecipientName().isBlank())
             throw new BadRequestException("recipientName is required");
+        // issuer/worksite are optional by design (minimal breaking changes)
     }
 
     /** Enforce invariants after PATCH and before save. */
@@ -195,5 +236,41 @@ public class BankCheckServiceImpl implements BankCheckService {
                 .map(c -> c.getAmount() == null ? BigDecimal.ZERO : c.getAmount())
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
                 .setScale(2, RoundingMode.HALF_UP);
+    }
+
+    // --- NEW helpers for the chain/impact ------------------------------------
+
+    /** Back-compat: infer personalIssuer if fromWhom says "personal" and the flag wasn't set. */
+    private void applyBackCompatPersonal(BankCheck e) {
+        if (!e.isPersonalIssuer() && e.getFromWhom() != null) {
+            String t = e.getFromWhom().trim();
+            if (!t.isEmpty() && "personal".equalsIgnoreCase(t)) {
+                e.setPersonalIssuer(true);
+            }
+        }
+    }
+
+    /** If we have a master worksite relation but no cached name, snapshot it. */
+    private void snapshotWorksiteName(BankCheck e) {
+        if (e.getSourceMasterWorksite() != null) {
+            if (e.getSourceMasterWorksiteName() == null || e.getSourceMasterWorksiteName().isBlank()) {
+                try {
+                    // within @Transactional, LAZY name access is fine
+                    e.setSourceMasterWorksiteName(e.getSourceMasterWorksite().getApprovedName());
+                } catch (Exception ignored) {
+                    // if name is not available for any reason, leave snapshot null
+                }
+            }
+        } else {
+            // if relation was removed, also clear the snapshot
+            e.setSourceMasterWorksiteName(null);
+        }
+    }
+
+    private boolean isAlEtimad(String recipientName) {
+        if (recipientName == null) return false;
+        String n = recipientName.trim().toLowerCase(Locale.ROOT);
+        // Normalize common variants; add more if needed
+        return "al-etimad".equals(n) || "al etimad".equals(n) || "aletimad".equals(n);
     }
 }

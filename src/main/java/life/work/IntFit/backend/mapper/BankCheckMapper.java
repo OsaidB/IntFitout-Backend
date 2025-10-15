@@ -2,33 +2,34 @@ package life.work.IntFit.backend.mapper;
 
 import life.work.IntFit.backend.dto.BankCheckDTO;
 import life.work.IntFit.backend.model.entity.BankCheck;
+import life.work.IntFit.backend.model.entity.MasterWorksite;
 import org.mapstruct.*;
 
-
-/**
- * MapStruct mapper:
- * - Maps by field name (includes imageUrl)
- * - AfterMapping normalizes strings (trim, blank -> null)
- * - update(...) supports PATCH semantics (ignores nulls)
- */
 @Mapper(
         componentModel = "spring",
         nullValueCheckStrategy = NullValueCheckStrategy.ALWAYS
 )
 public interface BankCheckMapper {
 
-    // Entity -> DTO
+    // ---------- Entity -> DTO ----------
+    @Mappings({
+            @Mapping(target = "sourceMasterWorksiteId",
+                    expression = "java(entity.getSourceMasterWorksite() != null ? entity.getSourceMasterWorksite().getId() : null)")
+    })
     BankCheckDTO toDto(BankCheck entity);
 
-    // DTO -> Entity
+    // ---------- DTO -> Entity ----------
+    @Mappings({
+            @Mapping(target = "sourceMasterWorksite",
+                    expression = "java(mapMaster(dto.getSourceMasterWorksiteId()))")
+    })
     BankCheck toEntity(BankCheckDTO dto);
 
-    // PATCH-like update: only non-null values from DTO will update the target entity
+    // ---------- PATCH-like update ----------
     @BeanMapping(nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
     void update(@MappingTarget BankCheck target, BankCheckDTO patch);
 
-    // --- Normalize strings on the way out/in ---------------------------------
-
+    // ---------- Normalization ----------
     @AfterMapping
     default void normalizeDto(@MappingTarget BankCheckDTO dto) {
         dto.setRecipientName(clean(dto.getRecipientName()));
@@ -36,6 +37,8 @@ public interface BankCheckMapper {
         dto.setFromWhom(clean(dto.getFromWhom()));
         dto.setSerialNumber(clean(dto.getSerialNumber()));
         dto.setImageUrl(clean(dto.getImageUrl()));
+        dto.setSourceMasterWorksiteName(clean(dto.getSourceMasterWorksiteName()));
+        // dto.personalIssuer intentionally not touched (Boolean for PATCH)
     }
 
     @AfterMapping
@@ -45,9 +48,41 @@ public interface BankCheckMapper {
         target.setFromWhom(clean(target.getFromWhom()));
         target.setSerialNumber(clean(target.getSerialNumber()));
         target.setImageUrl(clean(target.getImageUrl()));
+        target.setSourceMasterWorksiteName(clean(target.getSourceMasterWorksiteName()));
+
+        // Back-compat: infer personalIssuer from fromWhom == "personal" if not already flagged
+        if (!target.isPersonalIssuer() && target.getFromWhom() != null) {
+            if ("personal".equalsIgnoreCase(target.getFromWhom().trim())) {
+                target.setPersonalIssuer(true);
+            }
+        }
     }
 
-    // helper
+    // Make PATCH of relation & boolean safe: only apply when present
+    @AfterMapping
+    default void applyPatchSpecials(@MappingTarget BankCheck target, BankCheckDTO src) {
+        // Only set relation if ID provided
+        if (src.getSourceMasterWorksiteId() != null) {
+            target.setSourceMasterWorksite(mapMaster(src.getSourceMasterWorksiteId()));
+        }
+        // Only set cached name if provided
+        if (src.getSourceMasterWorksiteName() != null) {
+            target.setSourceMasterWorksiteName(clean(src.getSourceMasterWorksiteName()));
+        }
+        // Only set personalIssuer if provided (Boolean)
+        if (src.getPersonalIssuer() != null) {
+            target.setPersonalIssuer(Boolean.TRUE.equals(src.getPersonalIssuer()));
+        }
+    }
+
+    // ---------- helpers ----------
+    default MasterWorksite mapMaster(Long id) {
+        if (id == null) return null;
+        MasterWorksite mw = new MasterWorksite();
+        mw.setId(id); // JPA will treat this as a reference
+        return mw;
+    }
+
     default String clean(String s) {
         if (s == null) return null;
         String t = s.trim();

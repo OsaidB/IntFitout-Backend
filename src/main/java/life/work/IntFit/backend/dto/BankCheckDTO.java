@@ -14,10 +14,18 @@ public class BankCheckDTO {
     private String notes;
     private boolean cleared;
 
-    private String fromWhom;      // NEW
-    private String serialNumber;  // NEW
+    /** Issuer (exactly as written on the check). */
+    private String fromWhom;
 
-    // ⬇️ NEW
+    private String serialNumber;
+
     private String imageUrl;
 
+    /** NEW — personal issuer flag.
+     *  NOTE: Use Boolean for PATCH semantics (null = don't change). */
+    private Boolean personalIssuer;
+
+    /** NEW — “Taken from” Master Worksite (id + cached name). */
+    private Long   sourceMasterWorksiteId;
+    private String sourceMasterWorksiteName;
 }
