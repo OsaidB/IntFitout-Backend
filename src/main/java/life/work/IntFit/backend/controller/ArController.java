@@ -11,6 +11,7 @@ import life.work.IntFit.backend.dto.billing.AR.StatementInvoiceDTO;
 import life.work.IntFit.backend.dto.billing.AR.StatementChargeDTO;
 import life.work.IntFit.backend.service.ArService;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
@@ -75,6 +76,16 @@ public class ArController {
         // NOTE: AllocateRequestDTO.Line.invoiceId is treated as CHARGE ID in the service
         arService.allocatePayment(paymentId, body);
     }
+
+    // =========================
+    // Payments (DELETE)
+    // =========================
+    @DeleteMapping("/payments/{id}")
+    public ResponseEntity<Void> deletePayment(@PathVariable Long id) {
+        arService.deletePayment(id);   // implement below
+        return ResponseEntity.noContent().build(); // 204
+    }
+
 
     // =========================
     // Charges (CRUD)

@@ -9,6 +9,7 @@ import life.work.IntFit.backend.repository.ArPaymentAllocationRepository;
 import life.work.IntFit.backend.repository.ArPaymentRepository;
 import life.work.IntFit.backend.repository.ArChargeRepository; // <-- NEW repo
 import life.work.IntFit.backend.service.ArService;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -313,4 +314,19 @@ public class ArServiceImpl implements ArService {
     private static ResponseStatusException notFound(String m) {
         return new ResponseStatusException(HttpStatus.NOT_FOUND, m);
     }
+
+
+    @Override
+    @Transactional
+    public void deletePayment(Long id) {
+        // If allocations have a FK to payment (usual), remove them first unless JPA mapping cascades.
+        allocRepo.deleteAllByPayment_Id(id); // repository method below
+
+        try {
+            paymentRepo.deleteById(id);
+        } catch (EmptyResultDataAccessException ignored) {
+            // idempotent: deleting a non-existent payment is OK for our use case
+        }
+    }
+
 }

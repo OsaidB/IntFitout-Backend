@@ -22,4 +22,7 @@ public interface ArPaymentAllocationRepository extends JpaRepository<ArPaymentAl
                                 @Param("asOfDate") java.time.LocalDate asOfDate);
 
     boolean existsByPayment_Id(Long paymentId);
+
+    // ✅ add this
+    void deleteAllByPayment_Id(Long paymentId);
 }

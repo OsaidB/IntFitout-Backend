@@ -17,10 +17,9 @@ public interface ArService {
 
     // -------- Payments --------
     void allocatePayment(Long paymentId, AllocateRequestDTO body);
-
     ArPaymentDTO createPayment(CreatePaymentDTO body);
-
     List<ArPaymentDTO> listPayments(LocalDate from, LocalDate to, Long masterWorksiteId);
+    void deletePayment(Long paymentId);
 
     // -------- Charges (CRUD) --------
     // Create a new charge for a worksite
