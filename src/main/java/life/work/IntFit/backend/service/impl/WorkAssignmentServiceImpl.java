@@ -102,44 +102,43 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
             workAssignmentRepo.saveAll(toSave);
         }
 
-        // --- 2) Replace overtime rows for the date (delete then insert, dedup by member)
-        overtimeRepo.deleteAllByDate(date);
-
+        // --- 2) OVERTIME: idempotent + concurrency-safe (NO deleteAllByDate)
         List<OvertimeDTO> overtimeList = (dto.getOvertime() == null)
                 ? Collections.emptyList()
                 : dto.getOvertime();
 
-        // last-write-wins per memberId
+        // Collapse duplicates in the incoming payload (last-write-wins per member)
         Map<Long, Integer> lastPerMember = new LinkedHashMap<>();
         for (OvertimeDTO ot : overtimeList) {
             if (ot == null || ot.getTeamMemberId() == null) continue;
-            long tmId = ot.getTeamMemberId();
             int hours = Math.max(0, Optional.ofNullable(ot.getOvertimeHours()).orElse(0));
-            lastPerMember.put(tmId, hours);
+            lastPerMember.put(ot.getTeamMemberId(), hours);
         }
 
-        List<WorkAssignmentOvertime> otEntities = new ArrayList<>(lastPerMember.size());
-        for (Map.Entry<Long, Integer> e : lastPerMember.entrySet()) {
-            long tmId = e.getKey();
-            int hours = e.getValue();
+        // Members that should have a positive OT row after this save
+        Set<Long> keepPositive = lastPerMember.entrySet().stream()
+                .filter(e -> e.getValue() > 0)
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toSet());
 
-            if (hours <= 0) {
-                // 0 means no OT row for that member/date (we already deleted all for the day)
-                continue;
+        // Delete rows that exist for this date but are now absent (or zeroed) in the payload
+        for (WorkAssignmentOvertime existing : overtimeRepo.findAllByDate(date)) {
+            Long mid = existing.getTeamMember().getId();
+            if (!keepPositive.contains(mid)) {
+                overtimeRepo.deleteByMemberAndDate(mid, date);
             }
-
-            TeamMember member = teamMemberRepo.findById(tmId)
-                    .orElseThrow(() -> new IllegalArgumentException("TeamMember not found: " + tmId));
-
-            otEntities.add(WorkAssignmentOvertime.builder()
-                    .teamMember(member)
-                    .date(date)
-                    .overtimeHours(hours)
-                    .build());
         }
 
-        if (!otEntities.isEmpty()) {
-            overtimeRepo.saveAll(otEntities);
+        // Upsert positive hours; delete explicit zeros
+        for (Map.Entry<Long, Integer> e : lastPerMember.entrySet()) {
+            Long mid = e.getKey();
+            int hours = e.getValue();
+            if (hours <= 0) {
+                overtimeRepo.deleteByMemberAndDate(mid, date);
+            } else {
+                // relies on UNIQUE(team_member_id, date); uses ON DUPLICATE KEY UPDATE
+                overtimeRepo.upsert(mid, date, hours);
+            }
         }
     }
 
