@@ -29,7 +29,7 @@ public class WorkAssignmentDTO {
     private Double teamMemberDailyWage;
 
     /** Per-member overtime for that date (>= 0). Nullable if not loaded. */
-    private Integer overtimeHours;
+    private Double overtimeHours; // was Integer
 
     /** Derived hours for this specific assignment (split equally). Nullable if not computed. */
     private Double allocatedHours;

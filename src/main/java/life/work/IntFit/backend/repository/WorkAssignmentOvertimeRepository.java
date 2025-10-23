@@ -17,10 +17,8 @@ public interface WorkAssignmentOvertimeRepository extends JpaRepository<WorkAssi
 
     Optional<WorkAssignmentOvertime> findByTeamMember_IdAndDate(Long teamMemberId, LocalDate date);
 
-    /** Bulk-delete all overtime rows for a given date. */
     void deleteAllByDate(LocalDate date);
 
-    /** Idempotent write: creates or updates (team_member_id, date). Requires a UNIQUE(team_member_id, date). */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
     @Query(value = """
@@ -30,9 +28,8 @@ public interface WorkAssignmentOvertimeRepository extends JpaRepository<WorkAssi
         """, nativeQuery = true)
     void upsert(@Param("teamMemberId") Long teamMemberId,
                 @Param("date") LocalDate date,
-                @Param("hours") Integer hours);
+                @Param("hours") Double hours); // was Integer
 
-    /** Precise delete for a single member+date. */
     @Modifying
     @Transactional
     @Query("delete from WorkAssignmentOvertime w where w.teamMember.id = :teamMemberId and w.date = :date")

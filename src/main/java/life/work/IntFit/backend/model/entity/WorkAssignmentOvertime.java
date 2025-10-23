@@ -1,9 +1,9 @@
-// package: life.work.IntFit.backend.model.entity
+// WorkAssignmentOvertime.java
 package life.work.IntFit.backend.model.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
-
+import java.math.BigDecimal;
 import java.time.LocalDate;
 
 @Entity
@@ -11,11 +11,7 @@ import java.time.LocalDate;
         name = "work_assignment_overtime",
         uniqueConstraints = @UniqueConstraint(columnNames = {"team_member_id", "date"})
 )
-@Getter
-@Setter
-@NoArgsConstructor
-@AllArgsConstructor
-@Builder
+@Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
 public class WorkAssignmentOvertime {
 
     @Id
@@ -30,6 +26,7 @@ public class WorkAssignmentOvertime {
     private LocalDate date;
 
     /** Overtime hours in addition to the default 8h (>= 0). */
-    @Column(nullable = false)
-    private Integer overtimeHours;
+    @Column(name = "overtime_hours", nullable = false)
+    private Double overtimeHours; // was Integer
+
 }

@@ -16,5 +16,5 @@ public class OvertimeDTO {
     private Long teamMemberId;
 
     /** The overtime hours worked in addition to the default 8h day. */
-    private int overtimeHours;
+    private Double overtimeHours; // was int
 }

@@ -45,8 +45,8 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
                         Collectors.reducing(0, ra -> 1, Integer::sum)
                 ));
 
-        // overtime per member for that date
-        Map<Long, Integer> overtimeByMember = overtimeRepo.findAllByDate(date).stream()
+        // overtime per member for that date (Double)
+        Map<Long, Double> overtimeByMember = overtimeRepo.findAllByDate(date).stream()
                 .collect(Collectors.toMap(
                         o -> o.getTeamMember().getId(),
                         WorkAssignmentOvertime::getOvertimeHours
@@ -56,8 +56,8 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
         List<WorkAssignmentDTO> dtos = new ArrayList<>(rows.size());
         for (WorkAssignment wa : rows) {
             Long memberId = wa.getTeamMember().getId();
-            Integer ot = overtimeByMember.get(memberId);                 // may be null
-            Integer count = siteCounts.getOrDefault(memberId, 0);        // > 0 in practice
+            Double ot = overtimeByMember.get(memberId);                // may be null
+            Integer count = siteCounts.getOrDefault(memberId, 0);      // > 0 in practice
             dtos.add(mapper.toDTO(wa, ot, count));
         }
         return dtos;
@@ -108,16 +108,17 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
                 : dto.getOvertime();
 
         // Collapse duplicates in the incoming payload (last-write-wins per member)
-        Map<Long, Integer> lastPerMember = new LinkedHashMap<>();
+        Map<Long, Double> lastPerMember = new LinkedHashMap<>();
         for (OvertimeDTO ot : overtimeList) {
             if (ot == null || ot.getTeamMemberId() == null) continue;
-            int hours = Math.max(0, Optional.ofNullable(ot.getOvertimeHours()).orElse(0));
+            Double hours = Optional.ofNullable(ot.getOvertimeHours()).orElse(0d);
+            if (hours < 0d) hours = 0d;
             lastPerMember.put(ot.getTeamMemberId(), hours);
         }
 
         // Members that should have a positive OT row after this save
         Set<Long> keepPositive = lastPerMember.entrySet().stream()
-                .filter(e -> e.getValue() > 0)
+                .filter(e -> e.getValue() > 0d)
                 .map(Map.Entry::getKey)
                 .collect(Collectors.toSet());
 
@@ -130,10 +131,10 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
         }
 
         // Upsert positive hours; delete explicit zeros
-        for (Map.Entry<Long, Integer> e : lastPerMember.entrySet()) {
+        for (Map.Entry<Long, Double> e : lastPerMember.entrySet()) {
             Long mid = e.getKey();
-            int hours = e.getValue();
-            if (hours <= 0) {
+            Double hours = e.getValue();
+            if (hours <= 0d) {
                 overtimeRepo.deleteByMemberAndDate(mid, date);
             } else {
                 // relies on UNIQUE(team_member_id, date); uses ON DUPLICATE KEY UPDATE
@@ -141,5 +142,6 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
             }
         }
     }
+
 
 }

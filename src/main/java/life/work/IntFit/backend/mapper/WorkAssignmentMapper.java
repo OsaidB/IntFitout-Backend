@@ -8,6 +8,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class WorkAssignmentMapper {
 
+    private static final double BASE_DAY_HOURS = 8.0;
+
     /** Legacy/basic mapping (no overtime/allocated fields). */
     public WorkAssignmentDTO toDTO(WorkAssignment assignment) {
         WorkAssignmentDTO dto = new WorkAssignmentDTO();
@@ -27,20 +29,27 @@ public class WorkAssignmentMapper {
      * - overtimeHours: per-member overtime for that date (may be null)
      * - allocatedHours: (8 + overtimeHours) / siteCountForMember (null if siteCountForMember == null/0)
      */
-    public WorkAssignmentDTO toDTO(WorkAssignment assignment, Integer overtimeHours, Integer siteCountForMember) {
+    public WorkAssignmentDTO toDTO(WorkAssignment assignment, Double overtimeHours, Integer siteCountForMember) {
         WorkAssignmentDTO dto = toDTO(assignment);
+
+        // Keep null if not provided (caller may use null to indicate "not loaded")
         dto.setOvertimeHours(overtimeHours);
 
-
         if (siteCountForMember != null && siteCountForMember > 0) {
-            int ot = (overtimeHours != null && overtimeHours >= 0) ? overtimeHours : 0;
-            double allocated = (8.0 + ot) / siteCountForMember;
+            double otForSplit = (overtimeHours != null && overtimeHours > 0d) ? overtimeHours : 0d;
+            double allocated = (BASE_DAY_HOURS + otForSplit) / siteCountForMember;
             dto.setAllocatedHours(round2(allocated));
         } else {
             dto.setAllocatedHours(null);
         }
 
         return dto;
+    }
+
+    /** Backward-compat overload: accepts Integer OT and delegates to Double version. */
+    public WorkAssignmentDTO toDTO(WorkAssignment assignment, Integer overtimeHours, Integer siteCountForMember) {
+        Double ot = (overtimeHours == null) ? null : overtimeHours.doubleValue();
+        return toDTO(assignment, ot, siteCountForMember);
     }
 
     private Double round2(double val) {
