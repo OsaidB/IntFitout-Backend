@@ -68,53 +68,79 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
     public void saveAssignmentsForDate(DailyWorkAssignmentDTO dto) {
         final LocalDate date = Objects.requireNonNull(dto.getDate(), "date is required");
 
-        // --- 1) Replace assignments for the date (delete then insert)
+        // --- 1) Replace assignments for the date (delete then insert, dedup by member+site)
         workAssignmentRepo.deleteByDate(date);
 
-        List<WorkAssignment> toSave = (dto.getAssignments() == null ? List.<SimpleAssignmentDTO>of() : dto.getAssignments())
-                .stream()
-                .map(a -> {
-                    TeamMember member = teamMemberRepo.findById(a.getTeamMemberId())
-                            .orElseThrow(() -> new IllegalArgumentException("TeamMember not found: " + a.getTeamMemberId()));
-                    MasterWorksite master = masterWorksiteRepo.findById(a.getMasterWorksiteId())
-                            .orElseThrow(() -> new IllegalArgumentException("MasterWorksite not found: " + a.getMasterWorksiteId()));
+        List<SimpleAssignmentDTO> incoming = (dto.getAssignments() == null)
+                ? Collections.emptyList()
+                : dto.getAssignments();
 
-                    return WorkAssignment.builder()
-                            .teamMember(member)
-                            .masterWorksite(master)
-                            .date(date)
-                            .build();
-                })
-                .collect(Collectors.toList());
+        Set<String> uniqPairs = new HashSet<>(incoming.size() * 2);
+        List<WorkAssignment> toSave = new ArrayList<>();
+
+        for (SimpleAssignmentDTO a : incoming) {
+            if (a == null || a.getTeamMemberId() == null || a.getMasterWorksiteId() == null) continue;
+
+            long tmId = a.getTeamMemberId();
+            long msId = a.getMasterWorksiteId();
+            String key = tmId + ":" + msId;
+            if (!uniqPairs.add(key)) continue; // skip duplicate pairs in payload
+
+            TeamMember member = teamMemberRepo.findById(tmId)
+                    .orElseThrow(() -> new IllegalArgumentException("TeamMember not found: " + tmId));
+            MasterWorksite master = masterWorksiteRepo.findById(msId)
+                    .orElseThrow(() -> new IllegalArgumentException("MasterWorksite not found: " + msId));
+
+            toSave.add(WorkAssignment.builder()
+                    .teamMember(member)
+                    .masterWorksite(master)
+                    .date(date)
+                    .build());
+        }
 
         if (!toSave.isEmpty()) {
             workAssignmentRepo.saveAll(toSave);
         }
 
-        // --- 2) Replace overtime rows for the date (delete then insert)
+        // --- 2) Replace overtime rows for the date (delete then insert, dedup by member)
         overtimeRepo.deleteAllByDate(date);
 
-        List<OvertimeDTO> overtimeList = dto.getOvertime();
-        if (overtimeList != null && !overtimeList.isEmpty()) {
-            List<WorkAssignmentOvertime> otEntities = new ArrayList<>(overtimeList.size());
-            for (OvertimeDTO ot : overtimeList) {
-                if (ot == null || ot.getTeamMemberId() == null) continue;
-                int hours = Math.max(0, ot.getOvertimeHours());
+        List<OvertimeDTO> overtimeList = (dto.getOvertime() == null)
+                ? Collections.emptyList()
+                : dto.getOvertime();
 
-                TeamMember member = teamMemberRepo.findById(ot.getTeamMemberId())
-                        .orElseThrow(() -> new IllegalArgumentException("TeamMember not found: " + ot.getTeamMemberId()));
+        // last-write-wins per memberId
+        Map<Long, Integer> lastPerMember = new LinkedHashMap<>();
+        for (OvertimeDTO ot : overtimeList) {
+            if (ot == null || ot.getTeamMemberId() == null) continue;
+            long tmId = ot.getTeamMemberId();
+            int hours = Math.max(0, Optional.ofNullable(ot.getOvertimeHours()).orElse(0));
+            lastPerMember.put(tmId, hours);
+        }
 
-                otEntities.add(
-                        WorkAssignmentOvertime.builder()
-                                .teamMember(member)
-                                .date(date)
-                                .overtimeHours(hours)
-                                .build()
-                );
+        List<WorkAssignmentOvertime> otEntities = new ArrayList<>(lastPerMember.size());
+        for (Map.Entry<Long, Integer> e : lastPerMember.entrySet()) {
+            long tmId = e.getKey();
+            int hours = e.getValue();
+
+            if (hours <= 0) {
+                // 0 means no OT row for that member/date (we already deleted all for the day)
+                continue;
             }
-            if (!otEntities.isEmpty()) {
-                overtimeRepo.saveAll(otEntities);
-            }
+
+            TeamMember member = teamMemberRepo.findById(tmId)
+                    .orElseThrow(() -> new IllegalArgumentException("TeamMember not found: " + tmId));
+
+            otEntities.add(WorkAssignmentOvertime.builder()
+                    .teamMember(member)
+                    .date(date)
+                    .overtimeHours(hours)
+                    .build());
+        }
+
+        if (!otEntities.isEmpty()) {
+            overtimeRepo.saveAll(otEntities);
         }
     }
+
 }
