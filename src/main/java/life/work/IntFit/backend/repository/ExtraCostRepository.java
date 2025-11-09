@@ -2,7 +2,10 @@
 package life.work.IntFit.backend.repository;
 
 import org.springframework.data.jpa.repository.*;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import life.work.IntFit.backend.model.entity.ExtraCost;
@@ -28,5 +31,27 @@ public interface ExtraCostRepository extends JpaRepository<ExtraCost, Long> {
         and e.costDate between :start and :end
       order by e.costDate desc, e.id desc
     """)
-    List<ExtraCost> findDatedInRange(Long masterId, LocalDate start, LocalDate end);
+    List<ExtraCost> findDatedInRange(@Param("masterId") Long masterId,
+                                     @Param("start") LocalDate start,
+                                     @Param("end") LocalDate end);
+
+    @Query("""
+        select coalesce(sum(e.amount), 0)
+        from ExtraCost e
+        where e.masterWorksiteId = :masterId
+          and e.isGeneral = false
+          and e.costDate between :start and :end
+    """)
+    BigDecimal sumDatedInRange(@Param("masterId") Long masterId,
+                               @Param("start") LocalDate start,
+                               @Param("end") LocalDate end);
+
+    @Query("""
+        select coalesce(sum(e.amount), 0)
+        from ExtraCost e
+        where e.masterWorksiteId = :masterId
+          and (e.isGeneral = true or e.costDate is null)
+    """)
+    BigDecimal sumGeneral(@Param("masterId") Long masterId);
 }
+

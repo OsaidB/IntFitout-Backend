@@ -1,6 +1,7 @@
 package life.work.IntFit.backend.repository;
 
 import life.work.IntFit.backend.model.entity.Invoice;
+import life.work.IntFit.backend.repository.projection.InvoiceSumView;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.repository.query.Param;
@@ -8,6 +9,7 @@ import org.springframework.stereotype.Repository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.domain.Pageable;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -135,4 +137,14 @@ public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
 // @EntityGraph(attributePaths = {"worksite", "worksite.masterWorksite"})
 // Optional<Invoice> findFirstByMasterWorksite_IdOrderByDateAsc(Long masterWorksiteId);
 
+
+    @Query("""
+        select count(i) as count, coalesce(sum(coalesce(i.total, i.netTotal)), 0) as total
+        from Invoice i
+        where i.worksite.masterWorksite.id = :masterId
+          and i.date >= :from and i.date < :to
+    """)
+    InvoiceSumView sumForMasterInRange(@Param("masterId") Long masterId,
+                                       @Param("from") LocalDateTime from,
+                                       @Param("to")   LocalDateTime to);
 }
