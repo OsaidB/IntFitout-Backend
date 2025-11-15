@@ -1,11 +1,14 @@
 package life.work.IntFit.backend.repository;
 
 import life.work.IntFit.backend.model.entity.StatusMessage;
+import life.work.IntFit.backend.model.enums.StatusType;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -41,4 +44,17 @@ public interface StatusMessageRepository extends JpaRepository<StatusMessage, Lo
     // By worksite, newest first (with worksite eager to avoid N+1)
     @EntityGraph(attributePaths = {"worksite"})
     List<StatusMessage> findByWorksite_IdOrderByReceivedAtDesc(Long worksiteId);
+
+    // 🔹 Latest BALANCE message (change BALANCE if your enum uses a different name)
+    Optional<StatusMessage> findTopByStatusTypeOrderByReceivedAtDesc(StatusType statusType);
+
+    // 🔹 All messages from a given anchor time (including worksite), newest first
+    @Query("""
+        SELECT sm
+        FROM StatusMessage sm
+        LEFT JOIN FETCH sm.worksite
+        WHERE sm.receivedAt >= :anchor
+        ORDER BY sm.receivedAt DESC
+    """)
+    List<StatusMessage> findSinceAnchorWithWorksite(@Param("anchor") LocalDateTime anchor);
 }

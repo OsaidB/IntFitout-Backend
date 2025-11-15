@@ -199,4 +199,33 @@ public class StatusMessageController {
         statusMessageRepository.deleteById(id);
         return ResponseEntity.noContent().build();
     }
+
+
+    /**
+     * Messages since the latest BALANCE_AT_DATE message.
+     *
+     * Returns:
+     * - the latest BALANCE_AT_DATE message
+     * - plus all messages received AFTER it
+     * ordered newest first.
+     *
+     * If no BALANCE_AT_DATE exists yet, it falls back to the latest 20 messages.
+     */
+    @GetMapping("/since-latest-balance")
+    public ResponseEntity<List<StatusMessage>> getSinceLatestBalance() {
+        return statusMessageRepository
+                .findTopByStatusTypeOrderByReceivedAtDesc(StatusType.BALANCE_AT_DATE)
+                .map(balanceMsg -> {
+                    var messages = statusMessageRepository
+                            .findSinceAnchorWithWorksite(balanceMsg.getReceivedAt());
+                    return ResponseEntity.ok(messages);
+                })
+                .orElseGet(() -> {
+                    var latest = statusMessageRepository.findTop20ByOrderByReceivedAtDesc();
+                    return ResponseEntity.ok(latest);
+                });
+    }
+
+
+
 }
