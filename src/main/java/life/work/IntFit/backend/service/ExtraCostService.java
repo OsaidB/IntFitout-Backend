@@ -60,10 +60,23 @@ public class ExtraCostService {
     public void delete(Long id) { repo.deleteById(id); }
 
     private void validate(ExtraCostDTO dto) {
-        if (dto.masterWorksiteId() == null) throw new IllegalArgumentException("masterWorksiteId is required");
+        if (dto.masterWorksiteId() == null) {
+            throw new IllegalArgumentException("masterWorksiteId is required");
+        }
+
         BigDecimal amt = dto.amount();
-        if (amt == null || amt.signum() <= 0) throw new IllegalArgumentException("amount must be > 0");
-        if ((dto.isGeneral() == null || !dto.isGeneral()) && dto.date() == null)
+        if (amt == null) {
+            throw new IllegalArgumentException("amount is required");
+        }
+        // ✅ allow negative, only forbid zero
+        if (amt.signum() == 0) {
+            throw new IllegalArgumentException("amount must not be zero");
+        }
+
+        // date rule stays the same
+        if ((dto.isGeneral() == null || !dto.isGeneral()) && dto.date() == null) {
             throw new IllegalArgumentException("date required unless isGeneral=true");
+        }
     }
+
 }
