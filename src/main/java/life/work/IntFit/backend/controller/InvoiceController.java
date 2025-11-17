@@ -39,6 +39,20 @@ public class InvoiceController {
         return ResponseEntity.ok(saved);
     }
 
+
+    // 🔹 NEW: manual invoice created from the app UI
+    @PostMapping("/manual")
+    public ResponseEntity<?> createManualInvoice(@RequestBody InvoiceDTO invoiceDTO) {
+        if (invoiceDTO == null) {
+            System.err.println("❌ Received null InvoiceDTO (manual)");
+            return ResponseEntity.badRequest().body("Invoice data is missing.");
+        }
+
+        InvoiceDTO saved = invoiceService.saveManualInvoice(invoiceDTO);
+        return ResponseEntity.ok(saved);
+    }
+
+
     @GetMapping("/by-worksite/{worksiteId}")
     public ResponseEntity<List<InvoiceDTO>> getInvoicesByWorksite(@PathVariable Long worksiteId) {
         return ResponseEntity.ok(invoiceService.getInvoicesByWorksiteId(worksiteId));

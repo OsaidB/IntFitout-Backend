@@ -161,4 +161,20 @@ public class InvoiceService {
     }
 
 
+    @Transactional
+    public InvoiceDTO saveManualInvoice(InvoiceDTO dto) {
+        // Keep this defensive, but ONLY for manual calls
+        if (dto == null) {
+            throw new IllegalArgumentException("Manual InvoiceDTO must not be null");
+        }
+        if (dto.getItems() == null || dto.getItems().isEmpty()) {
+            throw new IllegalArgumentException("Manual invoice must contain at least one item");
+        }
+
+        // 👉 Important: we reuse the existing, battle-tested logic.
+        // We are NOT changing saveInvoice at all.
+        return saveInvoice(dto);
+    }
+
+
 }
