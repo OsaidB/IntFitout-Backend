@@ -7,6 +7,7 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
 
+import java.time.LocalDateTime; // ✅
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,13 +21,15 @@ public class PythonInvoiceProcessor {
     // 🔁 Internal endpoint to save the pending invoice
     private static final String SAVE_PENDING_ENDPOINT = "https://intfitout-backend-production.up.railway.app/api/invoices/pending/upload";
 
-    public void sendInvoiceToPython(String invoiceUrl) {
+    // ✅ CHANGED: accept smsReceivedAt
+    public void sendInvoiceToPython(String invoiceUrl, LocalDateTime smsReceivedAt) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
 
         // Step 1: Send PDF URL to Python tool
         Map<String, String> urlPayload = new HashMap<>();
         urlPayload.put("url", invoiceUrl);
+
         HttpEntity<Map<String, String>> urlRequest = new HttpEntity<>(urlPayload, headers);
 
         try {
@@ -38,6 +41,9 @@ public class PythonInvoiceProcessor {
 
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
                 PendingInvoiceDTO parsedInvoice = response.getBody();
+
+                // ✅ IMPORTANT: store the REAL SMS timestamp (used for uploader cutoffs)
+                parsedInvoice.setReceivedAtSms(smsReceivedAt);
 
                 List<PendingInvoiceDTO> wrapped = List.of(parsedInvoice);
                 HttpEntity<List<PendingInvoiceDTO>> saveRequest = new HttpEntity<>(wrapped, headers);
@@ -90,6 +96,9 @@ public class PythonInvoiceProcessor {
                     PendingInvoiceDTO fixedInvoice = response.getBody();
 
                     // Save the corrected pending invoice
+                    // ✅ keep the original SMS timestamp so your cutoff logic stays correct
+                    fixedInvoice.setReceivedAtSms(invoice.getReceivedAtSms());
+
                     List<PendingInvoiceDTO> wrapped = List.of(fixedInvoice);
                     HttpEntity<List<PendingInvoiceDTO>> saveRequest = new HttpEntity<>(wrapped, headers);
 

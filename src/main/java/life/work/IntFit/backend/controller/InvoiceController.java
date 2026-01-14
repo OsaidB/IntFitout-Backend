@@ -207,5 +207,16 @@ public class InvoiceController {
         return ResponseEntity.ok(invoiceService.changeInvoiceWorksite(id, worksiteId));
     }
 
+    // ✅ NEW: pending – latest SMS received datetime (the real SMS time)
+    @GetMapping("/pending/latest-sms-datetime")
+    public ResponseEntity<String> getLatestPendingInvoiceSmsDateTime(
+            @RequestParam(name = "onlyUnconfirmed", defaultValue = "false") boolean onlyUnconfirmed
+    ) {
+        return pendingInvoiceService.getLastPendingInvoiceSmsDateTime(onlyUnconfirmed)
+                .map(LocalDateTime::toString)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.ok(""));
+    }
+
 
 }

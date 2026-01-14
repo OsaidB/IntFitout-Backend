@@ -68,6 +68,7 @@ public class PendingInvoiceService {
 //        pendingInvoice.setParsedAt(LocalDateTime.now());
         pendingInvoice.setDate(dto.getDate());
         pendingInvoice.setConfirmed(false);
+        pendingInvoice.setReceivedAtSms(dto.getReceivedAtSms());
 
         // ✅ Set reprocessedFromId directly (NO object reference!)
         pendingInvoice.setReprocessedFromId(dto.getReprocessedFromId());
@@ -137,8 +138,13 @@ public class PendingInvoiceService {
 
     public void processSmsMessages(List<SmsMessageDTO> messages) {
         for (SmsMessageDTO message : messages) {
+
             if ("invoice".equalsIgnoreCase(message.getType())) {
-                pythonInvoiceProcessor.sendInvoiceToPython(message.getContent());
+                LocalDateTime smsReceivedAt = LocalDateTime.parse(message.getReceivedAt());
+
+                // ✅ IMPORTANT: pass smsReceivedAt to the Python call / save flow
+                pythonInvoiceProcessor.sendInvoiceToPython(message.getContent(), smsReceivedAt);
+
             } else if ("status".equalsIgnoreCase(message.getType())) {
                 processStatusMessage(message);
             }
@@ -285,6 +291,12 @@ public class PendingInvoiceService {
     }
 
 
+    public Optional<LocalDateTime> getLastPendingInvoiceSmsDateTime(boolean onlyUnconfirmed) {
+        LocalDateTime dt = onlyUnconfirmed
+                ? pendingInvoiceRepository.findLatestSmsDateTimeUnconfirmed()
+                : pendingInvoiceRepository.findLatestSmsDateTimeAll();
+        return Optional.ofNullable(dt);
+    }
 
 
 

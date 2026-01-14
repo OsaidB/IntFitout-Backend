@@ -85,4 +85,18 @@ public interface PendingInvoiceRepository extends JpaRepository<PendingInvoice, 
     // Top-K latest business datetimes (UNCONFIRMED)
     @Query("select p.date from PendingInvoice p where p.confirmed = false order by p.date desc")
     List<LocalDateTime> findLatestBusinessDateTimesUnconfirmed(Pageable pageable);
+
+
+// =========================
+//  LocalDateTime (SMS timestamp) helpers — NEW
+// =========================
+
+    // Single latest SMS received-at among ALL pending invoices
+    @Query("select max(p.receivedAtSms) from PendingInvoice p where p.receivedAtSms is not null")
+    LocalDateTime findLatestSmsDateTimeAll();
+
+    // Single latest SMS received-at among UNCONFIRMED pending invoices
+    @Query("select max(p.receivedAtSms) from PendingInvoice p where p.confirmed = false and p.receivedAtSms is not null")
+    LocalDateTime findLatestSmsDateTimeUnconfirmed();
+
 }

@@ -27,6 +27,9 @@ public class PendingInvoice {
 
     private Double total;
 
+    @Column(name = "received_at_sms")            // 👈 NEW: exact SMS time
+    private LocalDateTime receivedAtSms;
+
     private String worksiteName;
 
     @ManyToOne(fetch = FetchType.LAZY)

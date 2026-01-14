@@ -15,6 +15,8 @@ public class PendingInvoiceDTO {
     private Long id;
 
     private LocalDateTime date;
+    private LocalDateTime receivedAtSms;   // 👈 NEW
+
 
     private Double netTotal;
 
