@@ -3,6 +3,7 @@ package life.work.IntFit.backend.repository;
 
 import life.work.IntFit.backend.model.entity.WorkAssignment;
 import life.work.IntFit.backend.repository.projection.AssignmentView;
+import life.work.IntFit.backend.repository.projection.MemberDayCountView;
 import org.springframework.data.jpa.repository.*;
 import org.springframework.data.repository.query.Param;
 
@@ -26,6 +27,7 @@ public interface WorkAssignmentRepository extends JpaRepository<WorkAssignment, 
           a.date as date,
           tm.id as teamMemberId,
           tm.name as teamMemberName,
+          tm.role as teamMemberRole,
           tm.dailyWage as dailyWage
         from WorkAssignment a
           join a.teamMember tm

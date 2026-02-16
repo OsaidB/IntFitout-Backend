@@ -8,5 +8,6 @@ public interface AssignmentView {
     LocalDate getDate();
     Long getTeamMemberId();
     String getTeamMemberName();
-    BigDecimal getDailyWage(); // from tm.dailyWage
+    String getTeamMemberRole();   // ✅ add
+    Double getDailyWage();
 }
