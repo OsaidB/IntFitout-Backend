@@ -1,13 +1,15 @@
-// File: src/main/java/life/work/IntFit/backend/service/impl/WorksiteCostServiceImpl.java
+// File: src/main/java/life/work/IntFit/backend/service/expenses/WorksiteCostServiceImpl.java
 package life.work.IntFit.backend.service.expenses;
 
 import life.work.IntFit.backend.dto.expenses.WorksiteCostTotalsDTO;
-import life.work.IntFit.backend.model.entity.WorkAssignment;
+import life.work.IntFit.backend.model.entity.WorkAssignmentOvertime;
 import life.work.IntFit.backend.repository.ExtraCostRepository;
 import life.work.IntFit.backend.repository.InvoiceRepository;
+import life.work.IntFit.backend.repository.WorkAssignmentOvertimeRepository;
 import life.work.IntFit.backend.repository.WorkAssignmentRepository;
+import life.work.IntFit.backend.repository.projection.AssignmentView;
 import life.work.IntFit.backend.repository.projection.InvoiceSumView;
-import life.work.IntFit.backend.service.expenses.WorksiteCostService;
+import life.work.IntFit.backend.repository.projection.SiteCountView;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -22,6 +24,7 @@ import java.util.*;
 public class WorksiteCostServiceImpl implements WorksiteCostService {
 
     private final WorkAssignmentRepository assignmentRepo;
+    private final WorkAssignmentOvertimeRepository overtimeRepo;
     private final InvoiceRepository invoiceRepo;
     private final ExtraCostRepository extraRepo;
 
@@ -30,74 +33,81 @@ public class WorksiteCostServiceImpl implements WorksiteCostService {
     @Override
     public WorksiteCostTotalsDTO computeTotals(Long masterWorksiteId, LocalDate start, LocalDate end) {
 
-        // -------- Workers: match frontend logic --------
-        // 1) Load ALL assignments in range (across all worksites) to compute per-day site counts.
-        final List<WorkAssignment> allInRange =
-                assignmentRepo.findAllByDateBetween(start, end);
+        // =========================
+        // Workers (match frontend)
+        // =========================
 
-        // 2) Per-day, per-member site count across the whole company
-        final Map<LocalDate, Map<Long, Long>> siteCountByDayMember = new HashMap<>();
-        for (WorkAssignment a : allInRange) {
-            if (a == null || a.getTeamMember() == null) continue;
-            final LocalDate d = a.getDate();
-            final Long memberId = a.getTeamMember().getId();
-            siteCountByDayMember
-                    .computeIfAbsent(d, k -> new HashMap<>())
-                    .merge(memberId, 1L, Long::sum);
+        // A) rows only for THIS master
+        List<AssignmentView> rows = assignmentRepo.sliceByMasterAndRange(masterWorksiteId, start, end);
+
+        // B) site counts for ALL masters (date+member) to split hours/pay correctly
+        List<SiteCountView> counts = assignmentRepo.siteCountsByRange(start, end);
+        Map<String, Long> siteCountMap = new HashMap<>(counts.size() * 2);
+        for (SiteCountView c : counts) {
+            siteCountMap.put(key(c.getDate(), c.getTeamMemberId()), nvlLong(c.getSiteCount(), 1L));
+        }
+
+        // C) overtime map (date+member)
+        List<WorkAssignmentOvertime> overtimeRows = overtimeRepo.findAllByDateBetween(start, end);
+        Map<String, Double> overtimeMap = new HashMap<>(overtimeRows.size() * 2);
+        for (WorkAssignmentOvertime o : overtimeRows) {
+            double h = Optional.ofNullable(o.getOvertimeHours()).orElse(0d);
+            if (h < 0d) h = 0d;
+            overtimeMap.put(key(o.getDate(), o.getTeamMember().getId()), h);
         }
 
         BigDecimal totalHours = BigDecimal.ZERO;
         BigDecimal totalWages = BigDecimal.ZERO;
 
-        // 3) Cost only rows that BELONG to the requested master, but split hours using the global site count
-        for (WorkAssignment a : allInRange) {
-            if (a == null || a.getTeamMember() == null || a.getMasterWorksite() == null) continue;
-            if (!Objects.equals(a.getMasterWorksite().getId(), masterWorksiteId)) continue;
+        for (AssignmentView r : rows) {
+            LocalDate d = r.getDate();
+            Long tmId = r.getTeamMemberId();
 
-            final LocalDate d = a.getDate();
-            final Long memberId = a.getTeamMember().getId();
+            long siteCount = Math.max(siteCountMap.getOrDefault(key(d, tmId), 1L), 1L);
 
-            final long cnt = Math.max(
-                    siteCountByDayMember
-                            .getOrDefault(d, Collections.emptyMap())
-                            .getOrDefault(memberId, 1L),
-                    1L
+            double ot = overtimeMap.getOrDefault(key(d, tmId), 0d);
+            if (ot < 0d) ot = 0d;
+
+            // allocatedHours = (8 + ot) / siteCount
+            BigDecimal allocatedHours = BigDecimal.valueOf(8d + ot)
+                    .divide(BigDecimal.valueOf(siteCount), 8, RoundingMode.HALF_UP);
+
+            // dayPay = dailyWage * (8 + ot) / 8
+            BigDecimal dailyWage = bd(r.getDailyWage());
+            BigDecimal dayPay = dailyWage.multiply(
+                    BigDecimal.valueOf(8d + ot).divide(EIGHT, 8, RoundingMode.HALF_UP)
             );
 
-            // Prefer per-assignment allocated hours if present; else 8 / siteCount
-            BigDecimal allocated = reflectBD(a, "allocatedHours", "effectiveAllocated", "hoursAllocated", "allocated");
-            BigDecimal hours = (allocated != null)
-                    ? allocated
-                    : EIGHT.divide(BigDecimal.valueOf(cnt), 6, RoundingMode.HALF_UP);
+            // sharePay = dayPay / siteCount
+            BigDecimal sharePay = dayPay.divide(BigDecimal.valueOf(siteCount), 8, RoundingMode.HALF_UP);
 
-            // Prefer per-assignment wage override; else member's default
-            BigDecimal wageOverride = reflectBD(a, "teamMemberDailyWage", "dailyWageAtAssignment", "assignedDailyWage");
-            BigDecimal memberDefaultWage = toBD(a.getTeamMember().getDailyWage());
-            BigDecimal dailyWage = (wageOverride != null) ? wageOverride : nvl(memberDefaultWage);
-
-            BigDecimal hourly = dailyWage.divide(EIGHT, 6, RoundingMode.HALF_UP);
-            BigDecimal cost = hours.multiply(hourly);
-
-            totalHours = totalHours.add(hours);
-            totalWages = totalWages.add(cost);
+            totalHours = totalHours.add(allocatedHours);
+            totalWages = totalWages.add(sharePay);
         }
 
         totalHours = totalHours.setScale(2, RoundingMode.HALF_UP);
-        totalWages = money(totalWages); // round like UI (integer shekels)
+        totalWages = money0(totalWages); // integer shekels
 
-        // -------- Invoices: [from, to) by LocalDateTime --------
+        // =========================
+        // Invoices: [from, to)
+        // =========================
         LocalDateTime from = start.atStartOfDay();
         LocalDateTime toDT = end.plusDays(1).atStartOfDay();
+
         InvoiceSumView inv = invoiceRepo.sumForMasterInRange(masterWorksiteId, from, toDT);
         long invoiceCount = (inv != null && inv.getCount() != null) ? inv.getCount() : 0L;
-        BigDecimal invoiceTotal = money((inv != null && inv.getTotal() != null) ? inv.getTotal() : BigDecimal.ZERO);
+        BigDecimal invoiceTotal = money0((inv != null && inv.getTotal() != null) ? inv.getTotal() : BigDecimal.ZERO);
 
-        // -------- Extras --------
-        BigDecimal extrasDated   = money(nvl(extraRepo.sumDatedInRange(masterWorksiteId, start, end)));
-        BigDecimal extrasGeneral = money(nvl(extraRepo.sumGeneral(masterWorksiteId)));
-        BigDecimal extrasTotal   = extrasDated.add(extrasGeneral);
+        // =========================
+        // Extras
+        // =========================
+        BigDecimal extrasDated = money0(nvl(extraRepo.sumDatedInRange(masterWorksiteId, start, end)));
+        BigDecimal extrasGeneral = money0(nvl(extraRepo.sumGeneral(masterWorksiteId)));
+        BigDecimal extrasTotal = extrasDated.add(extrasGeneral);
 
-        // -------- Grand total --------
+        // =========================
+        // Grand total
+        // =========================
         BigDecimal grand = totalWages.add(invoiceTotal).add(extrasTotal);
 
         return WorksiteCostTotalsDTO.builder()
@@ -121,38 +131,27 @@ public class WorksiteCostServiceImpl implements WorksiteCostService {
                 .build();
     }
 
+    private static String key(LocalDate d, Long memberId) {
+        return d + ":" + memberId;
+    }
+
+    private static long nvlLong(Long v, long def) {
+        return v == null ? def : v;
+    }
+
     private static BigDecimal nvl(BigDecimal v) {
         return v == null ? BigDecimal.ZERO : v;
     }
 
-    private static BigDecimal money(BigDecimal v) {
-        return nvl(v).setScale(0, RoundingMode.HALF_UP);
+    private static BigDecimal bd(Double v) {
+        return v == null ? BigDecimal.ZERO : BigDecimal.valueOf(v);
     }
-    private static BigDecimal toBD(Object v) {
-        if (v == null) return null;
-        if (v instanceof BigDecimal bd) return bd;
-        if (v instanceof Number n) return BigDecimal.valueOf(n.doubleValue());
-        return new BigDecimal(v.toString());
-    }
-
 
     /**
-     * Reflection helper to read optional numeric fields that may not exist in your entity.
-     * Tries getters like getAllocatedHours(), getEffectiveAllocated(), etc.
+     * money rounded to 0 decimals (shekels)
      */
-    private static BigDecimal reflectBD(Object bean, String... props) {
-        for (String p : props) {
-            String getter = "get" + Character.toUpperCase(p.charAt(0)) + p.substring(1);
-            try {
-                Object v = bean.getClass().getMethod(getter).invoke(bean);
-                if (v == null) continue;
-                if (v instanceof BigDecimal bd) return bd;
-                if (v instanceof Number n) return BigDecimal.valueOf(n.doubleValue());
-                return new BigDecimal(v.toString());
-            } catch (Exception ignore) {
-                // no such getter or not accessible — try next alias
-            }
-        }
-        return null;
+    private static BigDecimal money0(BigDecimal v) {
+        return nvl(v).setScale(0, RoundingMode.HALF_UP);
     }
+
 }
