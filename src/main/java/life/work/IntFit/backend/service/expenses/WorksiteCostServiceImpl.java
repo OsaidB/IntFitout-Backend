@@ -2,8 +2,6 @@
 package life.work.IntFit.backend.service.expenses;
 
 import life.work.IntFit.backend.dto.expenses.WorksiteCostTotalsDTO;
-import life.work.IntFit.backend.model.entity.Invoice;
-import life.work.IntFit.backend.model.entity.InvoiceItem;
 import life.work.IntFit.backend.model.entity.WorkAssignmentOvertime;
 import life.work.IntFit.backend.model.enums.MaterialCategory;
 import life.work.IntFit.backend.repository.ExtraCostRepository;
@@ -11,6 +9,8 @@ import life.work.IntFit.backend.repository.InvoiceRepository;
 import life.work.IntFit.backend.repository.WorkAssignmentOvertimeRepository;
 import life.work.IntFit.backend.repository.WorkAssignmentRepository;
 import life.work.IntFit.backend.repository.projection.AssignmentView;
+import life.work.IntFit.backend.repository.projection.InvoiceCategoryTotalView;
+import life.work.IntFit.backend.repository.projection.InvoiceSumView;
 import life.work.IntFit.backend.repository.projection.SiteCountView;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -109,51 +109,33 @@ public class WorksiteCostServiceImpl implements WorksiteCostService {
         otherWages = money0(otherWages);
 
         // =========================
-        // Invoices + Supplies split (needs material.category)
-        // Matches frontend:
-        // - if items exist: sum per item total_price else qty*unit_price
-        // - if no items: put invoice header total under "other"
+        // Invoices + Supplies split — scoped DB aggregation
         // =========================
         LocalDateTime from = start.atStartOfDay();
         LocalDateTime toDT = end.plusDays(1).atStartOfDay();
 
-        // This has EntityGraph: items + items.material + worksite
-        List<Invoice> inRange = invoiceRepo.findByDateBetween(from, toDT);
+        // Invoice count from cheap aggregate query
+        InvoiceSumView invSum = invoiceRepo.sumForMasterInRange(masterWorksiteId, from, toDT);
+        long invoiceCount = (invSum != null && invSum.getCount() != null) ? invSum.getCount() : 0L;
 
+        // Per-category totals for invoices that have items
         BigDecimal suppliesPainters = BigDecimal.ZERO;
         BigDecimal suppliesGypsum = BigDecimal.ZERO;
         BigDecimal suppliesOther = BigDecimal.ZERO;
 
-        long invoiceCount = 0L;
-
-        for (Invoice inv : (inRange == null ? List.<Invoice>of() : inRange)) {
-            if (inv == null || inv.getWorksite() == null || inv.getWorksite().getMasterWorksite() == null) continue;
-            if (!Objects.equals(inv.getWorksite().getMasterWorksite().getId(), masterWorksiteId)) continue;
-
-            invoiceCount++;
-
-            List<InvoiceItem> items = inv.getItems();
-            if (items == null || items.isEmpty()) {
-                // No items -> header goes to OTHER
-                BigDecimal header = bd(inv.getTotal());
-                if (header.compareTo(BigDecimal.ZERO) == 0) header = bd(inv.getNetTotal());
-                suppliesOther = suppliesOther.add(header);
-                continue;
-            }
-
-            for (InvoiceItem it : items) {
-                BigDecimal lineTotal = extractItemTotal(it);
-
-                MaterialCategory cat = MaterialCategory.OTHER;
-                if (it != null && it.getMaterial() != null && it.getMaterial().getCategory() != null) {
-                    cat = it.getMaterial().getCategory();
-                }
-
-                if (cat == MaterialCategory.PAINTING) suppliesPainters = suppliesPainters.add(lineTotal);
-                else if (cat == MaterialCategory.GYPSUM) suppliesGypsum = suppliesGypsum.add(lineTotal);
-                else suppliesOther = suppliesOther.add(lineTotal);
-            }
+        List<InvoiceCategoryTotalView> catTotals =
+                invoiceRepo.sumItemTotalsByMaterialCategoryForMasterBetween(masterWorksiteId, from, toDT);
+        for (InvoiceCategoryTotalView v : catTotals) {
+            MaterialCategory cat = v.getCategory(); // null (no material/category) → OTHER
+            BigDecimal amt = bd(v.getTotal());
+            if (cat == MaterialCategory.PAINTING) suppliesPainters = suppliesPainters.add(amt);
+            else if (cat == MaterialCategory.GYPSUM) suppliesGypsum = suppliesGypsum.add(amt);
+            else suppliesOther = suppliesOther.add(amt);
         }
+
+        // Invoices with no items: header total counted as OTHER (matches frontend behaviour)
+        suppliesOther = suppliesOther.add(
+                nvl(invoiceRepo.sumHeaderTotalsForInvoicesWithNoItemsForMasterBetween(masterWorksiteId, from, toDT)));
 
         suppliesPainters = money0(suppliesPainters);
         suppliesGypsum = money0(suppliesGypsum);
@@ -218,25 +200,8 @@ public class WorksiteCostServiceImpl implements WorksiteCostService {
         return v == null ? BigDecimal.ZERO : v;
     }
 
-    // Overload to support BOTH styles of fields in your entities/projections
     private static BigDecimal bd(Double v) {
         return v == null ? BigDecimal.ZERO : BigDecimal.valueOf(v);
-    }
-    private static BigDecimal bd(BigDecimal v) {
-        return v == null ? BigDecimal.ZERO : v;
-    }
-
-    private static BigDecimal extractItemTotal(InvoiceItem it) {
-        if (it == null) return BigDecimal.ZERO;
-
-        Double tp = it.getTotal_price();
-        if (tp != null && Double.isFinite(tp)) return BigDecimal.valueOf(tp);
-
-        double qty = Optional.ofNullable(it.getQuantity()).orElse(0d);
-        double up = Optional.ofNullable(it.getUnit_price()).orElse(0d);
-        double prod = qty * up;
-
-        return Double.isFinite(prod) ? BigDecimal.valueOf(prod) : BigDecimal.ZERO;
     }
 
     private static Bucket bucketFromRole(String rawRole) {

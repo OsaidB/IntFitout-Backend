@@ -1,6 +1,7 @@
 package life.work.IntFit.backend.repository;
 
 import life.work.IntFit.backend.model.entity.Invoice;
+import life.work.IntFit.backend.repository.projection.InvoiceCategoryTotalView;
 import life.work.IntFit.backend.repository.projection.InvoiceSumView;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -147,4 +148,54 @@ public interface InvoiceRepository extends JpaRepository<Invoice, Long> {
     InvoiceSumView sumForMasterInRange(@Param("masterId") Long masterId,
                                        @Param("from") LocalDateTime from,
                                        @Param("to")   LocalDateTime to);
+
+    /**
+     * Sum of invoice ITEMS grouped by material category for a master worksite in [from, to).
+     * - Uses item.total_price if present; otherwise quantity * unit_price.
+     * - Invoices with no items are NOT included here (handled by the "no items" query).
+     */
+    @Query("""
+    select m.category as category,
+           coalesce(
+               sum(
+                   coalesce(
+                       it.total_price,
+                       (coalesce(it.quantity, 0.0) * coalesce(it.unit_price, 0.0))
+                   )
+               ),
+               0.0
+           ) as total
+    from Invoice i
+    join i.items it
+    left join it.material m
+    where i.worksite.masterWorksite.id = :masterId
+      and i.date >= :from and i.date < :to
+    group by m.category
+""")
+    List<InvoiceCategoryTotalView> sumItemTotalsByMaterialCategoryForMasterBetween(
+            @Param("masterId") Long masterId,
+            @Param("from") LocalDateTime from,
+            @Param("to")   LocalDateTime to
+    );
+
+
+    /**
+     * Frontend behavior match:
+     * If an invoice has NO items, its header total is counted under "other".
+     */
+    @Query("""
+    select coalesce(sum(coalesce(i.total, i.netTotal)), 0)
+    from Invoice i
+    where i.worksite.masterWorksite.id = :masterId
+      and i.date >= :from and i.date < :to
+      and i.items is empty
+""")
+    BigDecimal sumHeaderTotalsForInvoicesWithNoItemsForMasterBetween(
+            @Param("masterId") Long masterId,
+            @Param("from") LocalDateTime from,
+            @Param("to")   LocalDateTime to
+    );
+
+
+
 }
