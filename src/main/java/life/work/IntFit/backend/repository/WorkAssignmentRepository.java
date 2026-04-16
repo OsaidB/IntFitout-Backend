@@ -42,4 +42,32 @@ public interface WorkAssignmentRepository extends JpaRepository<WorkAssignment, 
     @EntityGraph(attributePaths = { "masterWorksite", "teamMember" })
     List<WorkAssignment> findAllByDateBetween(LocalDate start, LocalDate end);
 
+    @Query("""
+    select
+      a.date as date,
+      tm.id as teamMemberId,
+      count(a.id) as siteCount
+    from WorkAssignment a
+      join a.teamMember tm
+    where tm.id in :memberIds
+      and a.date between :start and :end
+    group by a.date, tm.id
+""")
+    List<MemberDayCountView> countSitesForMembersInRange(@Param("memberIds") List<Long> memberIds,
+                                                         @Param("start") LocalDate start,
+                                                         @Param("end") LocalDate end);
+    @Query("""
+    select a.date as date,
+           tm.id as teamMemberId,
+           count(a) as siteCount
+    from WorkAssignment a
+      join a.teamMember tm
+    where a.date between :start and :end
+    group by a.date, tm.id
+""")
+    List<life.work.IntFit.backend.repository.projection.SiteCountView> siteCountsByRange(
+            @Param("start") LocalDate start,
+            @Param("end") LocalDate end
+    );
+
 }

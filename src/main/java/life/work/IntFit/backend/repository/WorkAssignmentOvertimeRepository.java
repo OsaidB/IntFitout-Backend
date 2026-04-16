@@ -35,4 +35,27 @@ public interface WorkAssignmentOvertimeRepository extends JpaRepository<WorkAssi
     @Query("delete from WorkAssignmentOvertime w where w.teamMember.id = :teamMemberId and w.date = :date")
     void deleteByMemberAndDate(@Param("teamMemberId") Long teamMemberId,
                                @Param("date") LocalDate date);
+
+    @Query("""
+    select o
+    from WorkAssignmentOvertime o
+    where o.teamMember.id in :memberIds
+      and o.date between :start and :end
+    """)
+    List<WorkAssignmentOvertime> findForMembersInRange(@Param("memberIds") List<Long> memberIds,
+                                                       @Param("start") LocalDate start,
+                                                       @Param("end") LocalDate end);
+
+
+    @Query("""
+    select o from WorkAssignmentOvertime o
+    join fetch o.teamMember tm
+    where o.date between :start and :end
+    """)
+    List<WorkAssignmentOvertime> findAllByDateBetween(
+            @Param("start") LocalDate start,
+            @Param("end") LocalDate end
+    );
+
+
 }

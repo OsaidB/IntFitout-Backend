@@ -20,6 +20,9 @@ public class WorksiteCostTotalsDTO {
 
     private BigDecimal grandTotal; // workers.wages + extras.total + invoices.total
 
+    private SpentSplit spentSplit;
+
+
     @Getter @Setter @Builder
     @NoArgsConstructor @AllArgsConstructor
     public static class WorkersTotals {
@@ -40,5 +43,15 @@ public class WorksiteCostTotalsDTO {
     public static class InvoicesTotals {
         private long count;           // number of invoices in range
         private BigDecimal total;     // ₪
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SpentSplit {
+        private BigDecimal painters;
+        private BigDecimal gypsum;
+        private BigDecimal other;
     }
 }
