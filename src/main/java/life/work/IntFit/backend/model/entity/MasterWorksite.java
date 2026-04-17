@@ -1,6 +1,7 @@
 package life.work.IntFit.backend.model.entity;
 
 import jakarta.persistence.*;
+import life.work.IntFit.backend.model.enums.ProjectSizeTier;
 import lombok.*;
 
 import java.util.List;
@@ -21,6 +22,19 @@ public class MasterWorksite {
     private String approvedName;
 
     private String notes;
+
+    // Location
+    private String city;
+    private String area;
+    private String subArea;
+    private String locationDetails;
+
+    // Project size
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private ProjectSizeTier projectSizeTier;
+
+    private Double estimatedAreaM2;
 
     @OneToMany(mappedBy = "masterWorksite", cascade = CascadeType.ALL)
     private List<Worksite> subWorksites;

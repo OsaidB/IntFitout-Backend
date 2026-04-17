@@ -45,8 +45,8 @@ public class MasterWorksiteService {
     }
 
     @Transactional
-    public MasterWorksiteDTO add(String name) {
-        String trimmedName = name == null ? "" : name.trim();
+    public MasterWorksiteDTO add(MasterWorksiteDTO dto) {
+        String trimmedName = dto.getApprovedName() == null ? "" : dto.getApprovedName().trim();
         if (trimmedName.isEmpty()) {
             throw new IllegalArgumentException("Group name cannot be empty");
         }
@@ -58,7 +58,42 @@ public class MasterWorksiteService {
 
         MasterWorksite entity = MasterWorksite.builder()
                 .approvedName(trimmedName)
+                .notes(dto.getNotes())
+                .city(dto.getCity())
+                .area(dto.getArea())
+                .subArea(dto.getSubArea())
+                .locationDetails(dto.getLocationDetails())
+                .projectSizeTier(dto.getProjectSizeTier())
+                .estimatedAreaM2(dto.getEstimatedAreaM2())
                 .build();
+
+        return mapper.toDTO(masterRepo.save(entity));
+    }
+
+    @Transactional
+    public MasterWorksiteDTO update(Long id, MasterWorksiteDTO dto) {
+        MasterWorksite entity = masterRepo.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Master worksite not found"));
+
+        if (dto.getApprovedName() != null) {
+            String trimmedName = dto.getApprovedName().trim();
+            if (trimmedName.isEmpty()) {
+                throw new IllegalArgumentException("Approved name cannot be empty");
+            }
+            if (!entity.getApprovedName().equalsIgnoreCase(trimmedName) &&
+                    masterRepo.existsByApprovedNameIgnoreCase(trimmedName)) {
+                throw new IllegalArgumentException("A group with this name already exists");
+            }
+            entity.setApprovedName(trimmedName);
+        }
+
+        entity.setNotes(dto.getNotes());
+        entity.setCity(dto.getCity());
+        entity.setArea(dto.getArea());
+        entity.setSubArea(dto.getSubArea());
+        entity.setLocationDetails(dto.getLocationDetails());
+        entity.setProjectSizeTier(dto.getProjectSizeTier());
+        entity.setEstimatedAreaM2(dto.getEstimatedAreaM2());
 
         return mapper.toDTO(masterRepo.save(entity));
     }

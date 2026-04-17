@@ -45,8 +45,21 @@ public class MasterWorksiteController {
             return ResponseEntity.badRequest().body("Approved name is required.");
         }
 
-        MasterWorksiteDTO saved = service.add(dto.getApprovedName());
+        MasterWorksiteDTO saved = service.add(dto);
         return ResponseEntity.ok(saved);
+    }
+
+    @PutMapping("/{id}")
+    public ResponseEntity<?> update(@PathVariable Long id, @RequestBody MasterWorksiteDTO dto) {
+        if (dto == null || dto.getApprovedName() == null || dto.getApprovedName().isBlank()) {
+            return ResponseEntity.badRequest().body("Approved name is required.");
+        }
+        try {
+            MasterWorksiteDTO updated = service.update(id, dto);
+            return ResponseEntity.ok(updated);
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(ex.getMessage());
+        }
     }
 
     @PostMapping("/{id}/assign")

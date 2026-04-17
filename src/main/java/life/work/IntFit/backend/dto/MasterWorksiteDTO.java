@@ -1,5 +1,6 @@
 package life.work.IntFit.backend.dto;
 
+import life.work.IntFit.backend.model.enums.ProjectSizeTier;
 import lombok.*;
 
 @Getter @Setter
@@ -7,5 +8,15 @@ import lombok.*;
 public class MasterWorksiteDTO {
     private Long id;
     private String approvedName;
-    private String notes;  // 👈 add this
+    private String notes;
+
+    // Location
+    private String city;
+    private String area;
+    private String subArea;
+    private String locationDetails;
+
+    // Project size
+    private ProjectSizeTier projectSizeTier;
+    private Double estimatedAreaM2;
 }
