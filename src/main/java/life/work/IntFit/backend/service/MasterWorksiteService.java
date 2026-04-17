@@ -4,6 +4,7 @@ import life.work.IntFit.backend.dto.MasterWorksiteDTO;
 import life.work.IntFit.backend.mapper.MasterWorksiteMapper;
 import life.work.IntFit.backend.model.entity.MasterWorksite;
 import life.work.IntFit.backend.model.entity.Worksite;
+import life.work.IntFit.backend.repository.CityRepository;
 import life.work.IntFit.backend.repository.MasterWorksiteRepository;
 import life.work.IntFit.backend.repository.WorksiteRepository;
 import org.springframework.stereotype.Service;
@@ -20,15 +21,18 @@ public class MasterWorksiteService {
     private final MasterWorksiteRepository masterRepo;
     private final WorksiteRepository worksiteRepo;
     private final MasterWorksiteMapper mapper;
+    private final CityRepository cityRepo;
 
     public MasterWorksiteService(
             MasterWorksiteRepository masterRepo,
             WorksiteRepository worksiteRepo,
-            MasterWorksiteMapper mapper
+            MasterWorksiteMapper mapper,
+            CityRepository cityRepo
     ) {
         this.masterRepo = masterRepo;
         this.worksiteRepo = worksiteRepo;
         this.mapper = mapper;
+        this.cityRepo = cityRepo;
     }
 
     @Transactional(readOnly = true)
@@ -56,10 +60,12 @@ public class MasterWorksiteService {
             throw new IllegalArgumentException("A group with this name already exists");
         }
 
+        String canonicalCity = resolveCanonicalCity(dto.getCity());
+
         MasterWorksite entity = MasterWorksite.builder()
                 .approvedName(trimmedName)
                 .notes(dto.getNotes())
-                .city(dto.getCity())
+                .city(canonicalCity)
                 .area(dto.getArea())
                 .subArea(dto.getSubArea())
                 .locationDetails(dto.getLocationDetails())
@@ -87,8 +93,10 @@ public class MasterWorksiteService {
             entity.setApprovedName(trimmedName);
         }
 
+        String canonicalCity = resolveCanonicalCity(dto.getCity());
+
         entity.setNotes(dto.getNotes());
-        entity.setCity(dto.getCity());
+        entity.setCity(canonicalCity);
         entity.setArea(dto.getArea());
         entity.setSubArea(dto.getSubArea());
         entity.setLocationDetails(dto.getLocationDetails());
@@ -148,5 +156,16 @@ public class MasterWorksiteService {
         }
 
         masterRepo.delete(entity);
+    }
+
+    /**
+     * Returns the canonical City.name from the database, or null if city is blank/null.
+     * Throws if the city is provided but not found.
+     */
+    private String resolveCanonicalCity(String city) {
+        if (city == null || city.isBlank()) return null;
+        return cityRepo.findByNameIgnoreCase(city.trim())
+                .map(c -> c.getName())
+                .orElseThrow(() -> new IllegalArgumentException("Unknown city: " + city.trim()));
     }
 }
