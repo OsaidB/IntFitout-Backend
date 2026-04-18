@@ -4,6 +4,7 @@ import life.work.IntFit.backend.dto.MasterWorksiteDTO;
 import life.work.IntFit.backend.mapper.MasterWorksiteMapper;
 import life.work.IntFit.backend.model.entity.MasterWorksite;
 import life.work.IntFit.backend.model.entity.Worksite;
+import life.work.IntFit.backend.repository.AreaRepository;
 import life.work.IntFit.backend.repository.CityRepository;
 import life.work.IntFit.backend.repository.MasterWorksiteRepository;
 import life.work.IntFit.backend.repository.WorksiteRepository;
@@ -22,17 +23,20 @@ public class MasterWorksiteService {
     private final WorksiteRepository worksiteRepo;
     private final MasterWorksiteMapper mapper;
     private final CityRepository cityRepo;
+    private final AreaRepository areaRepo;
 
     public MasterWorksiteService(
             MasterWorksiteRepository masterRepo,
             WorksiteRepository worksiteRepo,
             MasterWorksiteMapper mapper,
-            CityRepository cityRepo
+            CityRepository cityRepo,
+            AreaRepository areaRepo
     ) {
         this.masterRepo = masterRepo;
         this.worksiteRepo = worksiteRepo;
         this.mapper = mapper;
         this.cityRepo = cityRepo;
+        this.areaRepo = areaRepo;
     }
 
     @Transactional(readOnly = true)
@@ -61,12 +65,13 @@ public class MasterWorksiteService {
         }
 
         String canonicalCity = resolveCanonicalCity(dto.getCity());
+        String canonicalArea = resolveCanonicalArea(canonicalCity, dto.getArea());
 
         MasterWorksite entity = MasterWorksite.builder()
                 .approvedName(trimmedName)
                 .notes(dto.getNotes())
                 .city(canonicalCity)
-                .area(dto.getArea())
+                .area(canonicalArea)
                 .subArea(dto.getSubArea())
                 .locationDetails(dto.getLocationDetails())
                 .projectSizeTier(dto.getProjectSizeTier())
@@ -94,10 +99,11 @@ public class MasterWorksiteService {
         }
 
         String canonicalCity = resolveCanonicalCity(dto.getCity());
+        String canonicalArea = resolveCanonicalArea(canonicalCity, dto.getArea());
 
         entity.setNotes(dto.getNotes());
         entity.setCity(canonicalCity);
-        entity.setArea(dto.getArea());
+        entity.setArea(canonicalArea);
         entity.setSubArea(dto.getSubArea());
         entity.setLocationDetails(dto.getLocationDetails());
         entity.setProjectSizeTier(dto.getProjectSizeTier());
@@ -167,5 +173,16 @@ public class MasterWorksiteService {
         return cityRepo.findByNameIgnoreCase(city.trim())
                 .map(c -> c.getName())
                 .orElseThrow(() -> new IllegalArgumentException("Unknown city: " + city.trim()));
+    }
+
+    private String resolveCanonicalArea(String canonicalCity, String area) {
+        if (area == null || area.isBlank()) return null;
+        if (canonicalCity == null || canonicalCity.isBlank()) {
+            throw new IllegalArgumentException("City must be provided when area is specified");
+        }
+        return areaRepo.findByCityNameIgnoreCaseAndNameIgnoreCase(canonicalCity, area.trim())
+                .map(a -> a.getName())
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Unknown area '" + area.trim() + "' under city '" + canonicalCity + "'"));
     }
 }
