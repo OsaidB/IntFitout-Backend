@@ -34,6 +34,7 @@ public class MasterWorksite {
     @Column(length = 20)
     private ProjectSizeTier projectSizeTier;
 
+    @Column(name = "estimated_aream2")
     private Double estimatedAreaM2;
 
     @OneToMany(mappedBy = "masterWorksite", cascade = CascadeType.ALL)
