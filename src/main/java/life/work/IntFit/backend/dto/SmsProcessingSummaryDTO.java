@@ -27,4 +27,7 @@ public class SmsProcessingSummaryDTO {
 
     private int statusProcessed;
     private int statusFailed;
+
+    /** Number of failed-import rows actually persisted to failed_invoice_imports for this batch. */
+    private int failedImportsRecorded;
 }

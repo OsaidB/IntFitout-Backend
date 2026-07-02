@@ -4,6 +4,7 @@ import life.work.IntFit.backend.dto.ChangeWorksiteDTO;
 import life.work.IntFit.backend.dto.InvoiceDTO;
 import life.work.IntFit.backend.dto.PendingInvoiceDTO;
 import life.work.IntFit.backend.dto.SmsMessageDTO;
+import life.work.IntFit.backend.model.entity.FailedInvoiceImport;
 import life.work.IntFit.backend.service.InvoiceService;
 import life.work.IntFit.backend.service.PendingInvoiceService;
 import org.springframework.http.ResponseEntity;
@@ -134,6 +135,15 @@ public class InvoiceController {
         // Still HTTP 200 for partial failures (Android treats any non-2xx as an upload failure).
         var summary = pendingInvoiceService.processSmsMessages(messages);
         return ResponseEntity.ok(summary);
+    }
+
+    // Review recent invoice SMS imports that failed to become PendingInvoices (newest first).
+    @GetMapping("/sms-import-failures")
+    public ResponseEntity<List<FailedInvoiceImport>> getSmsImportFailures(
+            @RequestParam(name = "limit", defaultValue = "50") int limit
+    ) {
+        int safeLimit = (limit <= 0 || limit > 500) ? 50 : limit;
+        return ResponseEntity.ok(pendingInvoiceService.getRecentFailedInvoiceImports(safeLimit));
     }
 
 

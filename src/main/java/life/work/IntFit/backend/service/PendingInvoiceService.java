@@ -10,6 +10,7 @@ import life.work.IntFit.backend.model.entity.*;
 import life.work.IntFit.backend.model.enums.StatusType;
 import life.work.IntFit.backend.repository.*;
 import life.work.IntFit.backend.utils.PythonInvoiceProcessor;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -38,6 +39,7 @@ public class PendingInvoiceService {
 
     private final PythonInvoiceProcessor pythonInvoiceProcessor;
     private final StatusMessageRepository statusMessageRepository;
+    private final FailedInvoiceImportRepository failedInvoiceImportRepository;
 
     public PendingInvoiceService(
             PendingInvoiceRepository pendingInvoiceRepository,
@@ -49,7 +51,8 @@ public class PendingInvoiceService {
             PendingInvoiceMapper pendingInvoiceMapper,
             PendingInvoiceItemMapper itemMapper,
             PythonInvoiceProcessor pythonInvoiceProcessor,               // ✅ ADD THIS
-            StatusMessageRepository statusMessageRepository              // ✅ AND THIS
+            StatusMessageRepository statusMessageRepository,             // ✅ AND THIS
+            FailedInvoiceImportRepository failedInvoiceImportRepository  // ✅ AND THIS
     ) {
         this.pendingInvoiceRepository = pendingInvoiceRepository;
         this.itemRepository = itemRepository;
@@ -61,6 +64,7 @@ public class PendingInvoiceService {
         this.itemMapper = itemMapper;
         this.pythonInvoiceProcessor = pythonInvoiceProcessor;       // ✅
         this.statusMessageRepository = statusMessageRepository;     // ✅
+        this.failedInvoiceImportRepository = failedInvoiceImportRepository; // ✅
     }
 
 
@@ -150,6 +154,7 @@ public class PendingInvoiceService {
         int invoicesFailed = 0;
         int statusProcessed = 0;
         int statusFailed = 0;
+        int failedImportsRecorded = 0;
 
         if (messages != null) {
             for (SmsMessageDTO message : messages) {
@@ -166,29 +171,53 @@ public class PendingInvoiceService {
                         System.err.println("⚠️ Skipping invoice SMS with invalid/blank URL (expected http/https): "
                                 + (content == null ? "null" : "\"" + content.trim() + "\""));
                         invoicesSkippedInvalidUrl++;
+                        failedImportsRecorded += recordFailedImport(
+                                type, content, message.getReceivedAt(), null,
+                                "INVALID_INVOICE_URL", null);
+                        continue;
+                    }
+
+                    // Parse the SMS timestamp separately so we can distinguish a bad
+                    // timestamp (INVALID_RECEIVED_AT) from a Python/save failure.
+                    String invoiceUrl = content.trim();
+                    LocalDateTime smsReceivedAt;
+                    try {
+                        smsReceivedAt = LocalDateTime.parse(message.getReceivedAt());
+                    } catch (Exception e) {
+                        invoicesFailed++;
+                        failedImportsRecorded += recordFailedImport(
+                                type, content, message.getReceivedAt(), null,
+                                "INVALID_RECEIVED_AT", e.getMessage());
+                        System.err.println("❌ Invalid receivedAt for invoice SMS: " + e.getMessage());
                         continue;
                     }
 
                     // ✅ One failed invoice message must not abort the rest of the batch.
                     try {
-                        String invoiceUrl = content.trim();
-                        LocalDateTime smsReceivedAt = LocalDateTime.parse(message.getReceivedAt());
-
                         // ✅ IMPORTANT: pass smsReceivedAt to the Python call / save flow
                         boolean ok = pythonInvoiceProcessor.sendInvoiceToPython(invoiceUrl, smsReceivedAt);
                         if (ok) {
                             invoicesProcessed++;
                         } else {
                             invoicesFailed++;
+                            failedImportsRecorded += recordFailedImport(
+                                    type, content, message.getReceivedAt(), smsReceivedAt,
+                                    "PYTHON_PROCESSING_FAILED",
+                                    "Python returned non-2xx / null body, or saving the pending invoice failed");
                         }
                     } catch (Exception e) {
                         invoicesFailed++;
+                        failedImportsRecorded += recordFailedImport(
+                                type, content, message.getReceivedAt(), smsReceivedAt,
+                                "PYTHON_PROCESSING_FAILED", e.getMessage());
                         System.err.println("❌ Failed to process invoice SMS: " + e.getMessage());
                     }
 
                 } else if ("status".equalsIgnoreCase(type)) {
                     statusMessages++;
                     // ✅ One failed status message must not abort the rest of the batch.
+                    // Status failures are counted but intentionally NOT persisted to the
+                    // invoice-failure table (this table is invoice-import focused).
                     try {
                         processStatusMessage(message);
                         statusProcessed++;
@@ -198,8 +227,11 @@ public class PendingInvoiceService {
                     }
 
                 } else {
-                    // ✅ Unknown type is counted and skipped, not silently ignored.
+                    // ✅ Unknown type is counted, skipped, and persisted for review.
                     unknownTypeMessages++;
+                    failedImportsRecorded += recordFailedImport(
+                            type, message.getContent(), message.getReceivedAt(), null,
+                            "UNKNOWN_MESSAGE_TYPE", null);
                     System.err.println("⚠️ Skipping SMS with unknown type: "
                             + (type == null ? "null" : "\"" + type + "\""));
                 }
@@ -216,10 +248,64 @@ public class PendingInvoiceService {
                 .invoicesFailed(invoicesFailed)
                 .statusProcessed(statusProcessed)
                 .statusFailed(statusFailed)
+                .failedImportsRecorded(failedImportsRecorded)
                 .build();
 
         System.out.println("🧾 SMS processing summary: " + summary);
         return summary;
+    }
+
+    /**
+     * Recent failed invoice imports, newest first (capped by {@code limit}).
+     */
+    public List<FailedInvoiceImport> getRecentFailedInvoiceImports(int limit) {
+        return failedInvoiceImportRepository.findAllByOrderByCreatedAtDesc(PageRequest.of(0, limit));
+    }
+
+    /**
+     * Persist one failed-import record. Never throws: if persisting the failure
+     * record itself fails, it is logged and processing of the batch continues.
+     * Returns 1 if a row was written, 0 otherwise.
+     */
+    private int recordFailedImport(String messageType, String rawContent, String receivedAtRaw,
+                                   LocalDateTime receivedAtSms, String failureReason, String errorMessage) {
+        try {
+            FailedInvoiceImport record = FailedInvoiceImport.builder()
+                    .messageType(messageType)
+                    .contentPreview(preview(rawContent))
+                    .urlHost(extractHost(rawContent))
+                    .receivedAtRaw(receivedAtRaw)
+                    .receivedAtSms(receivedAtSms)
+                    .failureReason(failureReason)
+                    .errorMessage(truncate(errorMessage, 1000))
+                    .build();
+            failedInvoiceImportRepository.save(record);
+            return 1;
+        } catch (Exception e) {
+            System.err.println("❌ Could not persist failed invoice import record: " + e.getMessage());
+            return 0;
+        }
+    }
+
+    /** Trimmed preview of the SMS content, capped at 512 chars. */
+    private static String preview(String content) {
+        if (content == null) return null;
+        return truncate(content.trim(), 512);
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) return null;
+        return s.length() > max ? s.substring(0, max) : s;
+    }
+
+    /** Host component of a URL, or null if the content is not a parseable URL. */
+    private static String extractHost(String content) {
+        if (content == null || content.isBlank()) return null;
+        try {
+            return new URI(content.trim()).getHost();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**
