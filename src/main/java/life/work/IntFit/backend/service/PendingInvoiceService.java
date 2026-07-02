@@ -1,5 +1,7 @@
 package life.work.IntFit.backend.service;
 
+import life.work.IntFit.backend.dto.InvoiceDTO;
+import life.work.IntFit.backend.dto.InvoiceItemDTO;
 import life.work.IntFit.backend.dto.PendingInvoiceDTO;
 import life.work.IntFit.backend.dto.SmsMessageDTO;
 import life.work.IntFit.backend.dto.SmsProcessingSummaryDTO;
@@ -40,6 +42,7 @@ public class PendingInvoiceService {
     private final PythonInvoiceProcessor pythonInvoiceProcessor;
     private final StatusMessageRepository statusMessageRepository;
     private final FailedInvoiceImportRepository failedInvoiceImportRepository;
+    private final InvoiceService invoiceService;
 
     public PendingInvoiceService(
             PendingInvoiceRepository pendingInvoiceRepository,
@@ -52,7 +55,8 @@ public class PendingInvoiceService {
             PendingInvoiceItemMapper itemMapper,
             PythonInvoiceProcessor pythonInvoiceProcessor,               // ✅ ADD THIS
             StatusMessageRepository statusMessageRepository,             // ✅ AND THIS
-            FailedInvoiceImportRepository failedInvoiceImportRepository  // ✅ AND THIS
+            FailedInvoiceImportRepository failedInvoiceImportRepository, // ✅ AND THIS
+            InvoiceService invoiceService                                // ✅ AND THIS (no reverse dependency: InvoiceService does not depend on PendingInvoiceService)
     ) {
         this.pendingInvoiceRepository = pendingInvoiceRepository;
         this.itemRepository = itemRepository;
@@ -65,6 +69,7 @@ public class PendingInvoiceService {
         this.pythonInvoiceProcessor = pythonInvoiceProcessor;       // ✅
         this.statusMessageRepository = statusMessageRepository;     // ✅
         this.failedInvoiceImportRepository = failedInvoiceImportRepository; // ✅
+        this.invoiceService = invoiceService;                       // ✅
     }
 
 
@@ -141,6 +146,72 @@ public class PendingInvoiceService {
 
         pending.setConfirmed(true);
         pendingInvoiceRepository.save(pending);
+    }
+
+
+    /**
+     * Atomically converts a pending invoice into a final Invoice AND marks the
+     * pending invoice confirmed, in a single transaction.
+     * <p>
+     * This replaces the previous two-call frontend flow
+     * (POST /api/invoices then PATCH /pending/{id}/confirm), which was not atomic:
+     * if the first call succeeded and the second failed, a final invoice existed
+     * while the pending invoice stayed unconfirmed, risking a duplicate final
+     * invoice on retry.
+     * <p>
+     * Because this method and {@link InvoiceService#saveInvoice} are both
+     * {@code @Transactional} with the default REQUIRED propagation, the inner
+     * call joins this same transaction: if saving the final invoice fails, the
+     * pending invoice is not marked confirmed; if marking it confirmed fails,
+     * the final invoice save is rolled back too.
+     */
+    @Transactional
+    public InvoiceDTO finalizePendingInvoice(Long pendingInvoiceId) {
+        PendingInvoice pending = pendingInvoiceRepository.findById(pendingInvoiceId)
+                .orElseThrow(() -> new IllegalArgumentException("Pending invoice not found"));
+
+        if (Boolean.TRUE.equals(pending.getConfirmed())) {
+            throw new IllegalStateException("This invoice has already been confirmed.");
+        }
+
+        // Same field mapping the frontend currently builds by hand before calling
+        // POST /api/invoices. Kept here so the mapping only needs to live in one place.
+        List<InvoiceItemDTO> items = pending.getItems().stream()
+                .map(item -> InvoiceItemDTO.builder()
+                        .description(item.getDescription())
+                        .quantity(item.getQuantity())
+                        .unit_price(item.getUnit_price())
+                        .total_price(item.getTotal_price())
+                        .materialId(item.getMaterial() != null ? item.getMaterial().getId() : null)
+                        .build())
+                .toList();
+
+        InvoiceDTO invoiceDTO = InvoiceDTO.builder()
+                .date(pending.getDate())
+                .netTotal(pending.getNetTotal())
+                .total(pending.getTotal())
+                .worksiteId(pending.getWorksite() != null ? pending.getWorksite().getId() : null)
+                .worksiteName(pending.getWorksiteName())
+                .total_match(pending.getTotalMatch())
+                .pdfUrl(pending.getPdfUrl())
+                .parsedAt(pending.getParsedAt())
+                .reprocessedFromId(pending.getReprocessedFromId())
+                .items(items)
+                .build();
+
+        // ✅ Reuse the existing final-invoice save logic (worksite/material matching
+        // stays exactly as it is for the current POST /api/invoices flow).
+        InvoiceDTO savedInvoice = invoiceService.saveInvoice(invoiceDTO);
+
+        // Same transaction as the save above: if this throws, the final invoice
+        // save is rolled back too, so no orphaned invoice is left behind.
+        pending.setConfirmed(true);
+        pendingInvoiceRepository.save(pending);
+
+        System.out.println("✅ Finalized pending invoice " + pendingInvoiceId
+                + " -> final invoice " + savedInvoice.getId());
+
+        return savedInvoice;
     }
 
 

@@ -7,6 +7,7 @@ import life.work.IntFit.backend.dto.SmsMessageDTO;
 import life.work.IntFit.backend.model.entity.FailedInvoiceImport;
 import life.work.IntFit.backend.service.InvoiceService;
 import life.work.IntFit.backend.service.PendingInvoiceService;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -115,6 +116,23 @@ public class InvoiceController {
     public ResponseEntity<Void> confirmPendingInvoice(@PathVariable Long id) {
         pendingInvoiceService.confirmPendingInvoice(id);
         return ResponseEntity.ok().build();
+    }
+
+    // 🔹 NEW: atomic pending -> final invoice. Creates the final Invoice and marks
+    // the pending invoice confirmed in one transaction, replacing the previous
+    // two-call frontend flow (POST /api/invoices then PATCH /pending/{id}/confirm),
+    // which could leave a final invoice orphaned if the second call failed.
+    // The old two-call flow is left in place unchanged; this is additive.
+    @PostMapping("/pending/{id}/finalize")
+    public ResponseEntity<?> finalizePendingInvoice(@PathVariable Long id) {
+        try {
+            InvoiceDTO savedInvoice = pendingInvoiceService.finalizePendingInvoice(id);
+            return ResponseEntity.ok(savedInvoice);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(e.getMessage());
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(e.getMessage());
+        }
     }
 
     @DeleteMapping("/pending/{id}")
