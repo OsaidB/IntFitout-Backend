@@ -12,6 +12,8 @@ import life.work.IntFit.backend.utils.PythonInvoiceProcessor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashSet;
@@ -141,14 +143,46 @@ public class PendingInvoiceService {
         for (SmsMessageDTO message : messages) {
 
             if ("invoice".equalsIgnoreCase(message.getType())) {
+                String content = message.getContent();
+
+                // ✅ Validate the URL before calling Python. Invalid/blank/non-http(s)
+                // content is skipped (no Python call, no PendingInvoice), and does not
+                // abort processing of the rest of the batch.
+                if (!isValidInvoiceUrl(content)) {
+                    System.err.println("⚠️ Skipping invoice SMS with invalid/blank URL (expected http/https): "
+                            + (content == null ? "null" : "\"" + content.trim() + "\""));
+                    continue;
+                }
+
+                String invoiceUrl = content.trim();
                 LocalDateTime smsReceivedAt = LocalDateTime.parse(message.getReceivedAt());
 
                 // ✅ IMPORTANT: pass smsReceivedAt to the Python call / save flow
-                pythonInvoiceProcessor.sendInvoiceToPython(message.getContent(), smsReceivedAt);
+                pythonInvoiceProcessor.sendInvoiceToPython(invoiceUrl, smsReceivedAt);
 
             } else if ("status".equalsIgnoreCase(message.getType())) {
                 processStatusMessage(message);
             }
+        }
+    }
+
+    /**
+     * Basic validation for an invoice PDF URL before it is handed to the Python converter.
+     * Accepts only a parseable http/https URL with a non-blank host.
+     * Intentionally minimal — this is not a full SSRF / private-IP blocker.
+     */
+    private boolean isValidInvoiceUrl(String content) {
+        if (content == null || content.isBlank()) {
+            return false;
+        }
+        try {
+            URI uri = new URI(content.trim());
+            String scheme = uri.getScheme();
+            String host = uri.getHost();
+            boolean httpScheme = "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme);
+            return httpScheme && host != null && !host.isBlank();
+        } catch (URISyntaxException e) {
+            return false;
         }
     }
 
