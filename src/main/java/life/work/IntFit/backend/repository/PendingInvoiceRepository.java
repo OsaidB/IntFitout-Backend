@@ -99,4 +99,9 @@ public interface PendingInvoiceRepository extends JpaRepository<PendingInvoice, 
     @Query("select max(p.receivedAtSms) from PendingInvoice p where p.confirmed = false and p.receivedAtSms is not null")
     LocalDateTime findLatestSmsDateTimeUnconfirmed();
 
+    // Distinct original IDs that already have at least one reprocessed child invoice.
+    // Used to avoid reprocessing an original that has already been reprocessed once.
+    @Query("select distinct p.reprocessedFromId from PendingInvoice p where p.reprocessedFromId is not null")
+    List<Long> findAllReprocessedFromIds();
+
 }

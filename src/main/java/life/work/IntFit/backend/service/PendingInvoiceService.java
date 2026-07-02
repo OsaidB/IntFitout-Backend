@@ -17,6 +17,7 @@ import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 @Service
 public class PendingInvoiceService {
@@ -280,11 +281,29 @@ public class PendingInvoiceService {
     public void reprocessUnmatchedInvoices() {
         List<PendingInvoice> unmatched = pendingInvoiceRepository.findByConfirmedFalseAndTotalMatchFalse();
 
-        // Only keep invoices that have a non-empty PDF URL and weren't reprocessed already
-        List<PendingInvoice> validUnmatched = unmatched.stream()
-                .filter(inv -> inv.getPdfUrl() != null && !inv.getPdfUrl().isEmpty())
+        // Original IDs that already have at least one reprocessed child invoice.
+        // These originals must NOT be reprocessed again, otherwise repeated calls
+        // to this endpoint would keep producing duplicate reprocessed rows.
+        Set<Long> alreadyReprocessedOriginalIds =
+                new HashSet<>(pendingInvoiceRepository.findAllReprocessedFromIds());
+
+        // Base candidates: unconfirmed + mismatched, with a usable PDF URL,
+        // and not themselves a reprocessed child (reprocessedFromId == null).
+        List<PendingInvoice> candidates = unmatched.stream()
+                .filter(inv -> inv.getPdfUrl() != null && !inv.getPdfUrl().isBlank())
                 .filter(inv -> inv.getReprocessedFromId() == null)
                 .toList();
+
+        // Skip originals that already have a reprocessed child.
+        List<PendingInvoice> validUnmatched = candidates.stream()
+                .filter(inv -> !alreadyReprocessedOriginalIds.contains(inv.getId()))
+                .toList();
+
+        int skippedAlreadyReprocessed = candidates.size() - validUnmatched.size();
+        System.out.println("🔁 Reprocess selection: unmatched=" + unmatched.size()
+                + ", candidates=" + candidates.size()
+                + ", skippedAlreadyReprocessed=" + skippedAlreadyReprocessed
+                + ", sentToPython=" + validUnmatched.size());
 
         // ✅ Send full objects (not just URLs) to the Python processor
         pythonInvoiceProcessor.reprocessMismatchedInvoices(validUnmatched);
