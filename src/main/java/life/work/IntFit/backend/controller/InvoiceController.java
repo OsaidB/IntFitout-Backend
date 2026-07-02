@@ -130,8 +130,10 @@ public class InvoiceController {
             return ResponseEntity.badRequest().body("SMS message list is empty.");
         }
 
-        pendingInvoiceService.processSmsMessages(messages);
-        return ResponseEntity.ok().build();
+        // Returns a per-batch summary so partial failures are visible to the caller/logs.
+        // Still HTTP 200 for partial failures (Android treats any non-2xx as an upload failure).
+        var summary = pendingInvoiceService.processSmsMessages(messages);
+        return ResponseEntity.ok(summary);
     }
 
 

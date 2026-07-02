@@ -2,6 +2,7 @@ package life.work.IntFit.backend.service;
 
 import life.work.IntFit.backend.dto.PendingInvoiceDTO;
 import life.work.IntFit.backend.dto.SmsMessageDTO;
+import life.work.IntFit.backend.dto.SmsProcessingSummaryDTO;
 import life.work.IntFit.backend.mapper.InvoiceMapper;
 import life.work.IntFit.backend.mapper.PendingInvoiceItemMapper;
 import life.work.IntFit.backend.mapper.PendingInvoiceMapper;
@@ -139,31 +140,86 @@ public class PendingInvoiceService {
     }
 
 
-    public void processSmsMessages(List<SmsMessageDTO> messages) {
-        for (SmsMessageDTO message : messages) {
+    public SmsProcessingSummaryDTO processSmsMessages(List<SmsMessageDTO> messages) {
+        int totalMessages = (messages == null) ? 0 : messages.size();
+        int invoiceMessages = 0;
+        int statusMessages = 0;
+        int unknownTypeMessages = 0;
+        int invoicesProcessed = 0;
+        int invoicesSkippedInvalidUrl = 0;
+        int invoicesFailed = 0;
+        int statusProcessed = 0;
+        int statusFailed = 0;
 
-            if ("invoice".equalsIgnoreCase(message.getType())) {
-                String content = message.getContent();
+        if (messages != null) {
+            for (SmsMessageDTO message : messages) {
+                String type = message.getType();
 
-                // ✅ Validate the URL before calling Python. Invalid/blank/non-http(s)
-                // content is skipped (no Python call, no PendingInvoice), and does not
-                // abort processing of the rest of the batch.
-                if (!isValidInvoiceUrl(content)) {
-                    System.err.println("⚠️ Skipping invoice SMS with invalid/blank URL (expected http/https): "
-                            + (content == null ? "null" : "\"" + content.trim() + "\""));
-                    continue;
+                if ("invoice".equalsIgnoreCase(type)) {
+                    invoiceMessages++;
+                    String content = message.getContent();
+
+                    // ✅ Validate the URL before calling Python. Invalid/blank/non-http(s)
+                    // content is skipped (no Python call, no PendingInvoice), and does not
+                    // abort processing of the rest of the batch.
+                    if (!isValidInvoiceUrl(content)) {
+                        System.err.println("⚠️ Skipping invoice SMS with invalid/blank URL (expected http/https): "
+                                + (content == null ? "null" : "\"" + content.trim() + "\""));
+                        invoicesSkippedInvalidUrl++;
+                        continue;
+                    }
+
+                    // ✅ One failed invoice message must not abort the rest of the batch.
+                    try {
+                        String invoiceUrl = content.trim();
+                        LocalDateTime smsReceivedAt = LocalDateTime.parse(message.getReceivedAt());
+
+                        // ✅ IMPORTANT: pass smsReceivedAt to the Python call / save flow
+                        boolean ok = pythonInvoiceProcessor.sendInvoiceToPython(invoiceUrl, smsReceivedAt);
+                        if (ok) {
+                            invoicesProcessed++;
+                        } else {
+                            invoicesFailed++;
+                        }
+                    } catch (Exception e) {
+                        invoicesFailed++;
+                        System.err.println("❌ Failed to process invoice SMS: " + e.getMessage());
+                    }
+
+                } else if ("status".equalsIgnoreCase(type)) {
+                    statusMessages++;
+                    // ✅ One failed status message must not abort the rest of the batch.
+                    try {
+                        processStatusMessage(message);
+                        statusProcessed++;
+                    } catch (Exception e) {
+                        statusFailed++;
+                        System.err.println("❌ Failed to process status SMS: " + e.getMessage());
+                    }
+
+                } else {
+                    // ✅ Unknown type is counted and skipped, not silently ignored.
+                    unknownTypeMessages++;
+                    System.err.println("⚠️ Skipping SMS with unknown type: "
+                            + (type == null ? "null" : "\"" + type + "\""));
                 }
-
-                String invoiceUrl = content.trim();
-                LocalDateTime smsReceivedAt = LocalDateTime.parse(message.getReceivedAt());
-
-                // ✅ IMPORTANT: pass smsReceivedAt to the Python call / save flow
-                pythonInvoiceProcessor.sendInvoiceToPython(invoiceUrl, smsReceivedAt);
-
-            } else if ("status".equalsIgnoreCase(message.getType())) {
-                processStatusMessage(message);
             }
         }
+
+        SmsProcessingSummaryDTO summary = SmsProcessingSummaryDTO.builder()
+                .totalMessages(totalMessages)
+                .invoiceMessages(invoiceMessages)
+                .statusMessages(statusMessages)
+                .unknownTypeMessages(unknownTypeMessages)
+                .invoicesProcessed(invoicesProcessed)
+                .invoicesSkippedInvalidUrl(invoicesSkippedInvalidUrl)
+                .invoicesFailed(invoicesFailed)
+                .statusProcessed(statusProcessed)
+                .statusFailed(statusFailed)
+                .build();
+
+        System.out.println("🧾 SMS processing summary: " + summary);
+        return summary;
     }
 
     /**

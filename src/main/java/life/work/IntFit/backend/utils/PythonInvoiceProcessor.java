@@ -27,8 +27,8 @@ public class PythonInvoiceProcessor {
         this.pendingInvoiceService = pendingInvoiceService;
     }
 
-    // ✅ CHANGED: accept smsReceivedAt
-    public void sendInvoiceToPython(String invoiceUrl, LocalDateTime smsReceivedAt) {
+    // ✅ CHANGED: accept smsReceivedAt; return whether the invoice was parsed AND saved.
+    public boolean sendInvoiceToPython(String invoiceUrl, LocalDateTime smsReceivedAt) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
 
@@ -54,13 +54,16 @@ public class PythonInvoiceProcessor {
                 // ✅ Save in-process instead of POSTing back to our own HTTP endpoint.
                 pendingInvoiceService.savePendingInvoice(parsedInvoice);
                 System.out.println("✅ Pending invoice saved successfully (in-process)");
+                return true;
 
             } else {
                 System.err.println("❌ Python tool returned non-success status: " + response.getStatusCode());
+                return false;
             }
 
         } catch (Exception e) {
             System.err.println("❌ Exception during Python invoice processing: " + e.getMessage());
+            return false;
         }
     }
 
