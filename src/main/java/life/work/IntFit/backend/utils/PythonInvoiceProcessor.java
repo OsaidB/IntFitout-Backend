@@ -2,7 +2,8 @@ package life.work.IntFit.backend.utils;
 
 import life.work.IntFit.backend.dto.PendingInvoiceDTO;
 import life.work.IntFit.backend.model.entity.PendingInvoice;
-import org.springframework.beans.factory.annotation.Autowired;
+import life.work.IntFit.backend.service.PendingInvoiceService;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestTemplate;
@@ -18,8 +19,13 @@ public class PythonInvoiceProcessor {
     private final RestTemplate restTemplate = new RestTemplate();
     private static final String PYTHON_API_URL = "https://invoices-convertor-1.onrender.com/process-invoice";
 
-    // 🔁 Internal endpoint to save the pending invoice
-    private static final String SAVE_PENDING_ENDPOINT = "https://intfitout-backend-production.up.railway.app/api/invoices/pending/upload";
+    // ✅ In-process persistence (replaces the previous HTTP self-POST to /api/invoices/pending/upload).
+    // @Lazy breaks a circular dependency: PendingInvoiceService already depends on PythonInvoiceProcessor.
+    private final PendingInvoiceService pendingInvoiceService;
+
+    public PythonInvoiceProcessor(@Lazy PendingInvoiceService pendingInvoiceService) {
+        this.pendingInvoiceService = pendingInvoiceService;
+    }
 
     // ✅ CHANGED: accept smsReceivedAt
     public void sendInvoiceToPython(String invoiceUrl, LocalDateTime smsReceivedAt) {
@@ -45,20 +51,9 @@ public class PythonInvoiceProcessor {
                 // ✅ IMPORTANT: store the REAL SMS timestamp (used for uploader cutoffs)
                 parsedInvoice.setReceivedAtSms(smsReceivedAt);
 
-                List<PendingInvoiceDTO> wrapped = List.of(parsedInvoice);
-                HttpEntity<List<PendingInvoiceDTO>> saveRequest = new HttpEntity<>(wrapped, headers);
-
-                ResponseEntity<Void> saveResponse = restTemplate.postForEntity(
-                        SAVE_PENDING_ENDPOINT,
-                        saveRequest,
-                        Void.class
-                );
-
-                if (saveResponse.getStatusCode().is2xxSuccessful()) {
-                    System.out.println("✅ Pending invoice saved successfully");
-                } else {
-                    System.err.println("❌ Failed to save pending invoice: " + saveResponse.getStatusCode());
-                }
+                // ✅ Save in-process instead of POSTing back to our own HTTP endpoint.
+                pendingInvoiceService.savePendingInvoice(parsedInvoice);
+                System.out.println("✅ Pending invoice saved successfully (in-process)");
 
             } else {
                 System.err.println("❌ Python tool returned non-success status: " + response.getStatusCode());
@@ -99,20 +94,9 @@ public class PythonInvoiceProcessor {
                     // ✅ keep the original SMS timestamp so your cutoff logic stays correct
                     fixedInvoice.setReceivedAtSms(invoice.getReceivedAtSms());
 
-                    List<PendingInvoiceDTO> wrapped = List.of(fixedInvoice);
-                    HttpEntity<List<PendingInvoiceDTO>> saveRequest = new HttpEntity<>(wrapped, headers);
-
-                    ResponseEntity<Void> saveResponse = restTemplate.postForEntity(
-                            SAVE_PENDING_ENDPOINT,
-                            saveRequest,
-                            Void.class
-                    );
-
-                    if (saveResponse.getStatusCode().is2xxSuccessful()) {
-                        System.out.println("✅ Fixed invoice saved: ID " + invoice.getId());
-                    } else {
-                        System.err.println("❌ Failed to save fixed invoice: " + saveResponse.getStatusCode());
-                    }
+                    // ✅ Save in-process instead of POSTing back to our own HTTP endpoint.
+                    pendingInvoiceService.savePendingInvoice(fixedInvoice);
+                    System.out.println("✅ Fixed invoice saved (in-process): ID " + invoice.getId());
 
                 } else {
                     System.err.println("❌ Python tool failed for invoice ID " + invoice.getId() + ": " + response.getStatusCode());
