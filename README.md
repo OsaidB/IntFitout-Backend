@@ -30,7 +30,7 @@ Python returns parsed invoice JSON
         │
         ▼
 Backend saves the result as a PendingInvoice
-        │  (via a self-call to its own POST /api/invoices/pending/upload)
+        │  (in-process, via PendingInvoiceService — see Section 8)
         ▼
 Frontend lists/reviews pending invoices  (GET /api/invoices/pending)
         │
@@ -76,7 +76,7 @@ Files/classes directly involved in the invoice/SMS/Python flow:
 |---|---|
 | `controller/InvoiceController.java` | All invoice + pending-invoice HTTP endpoints — SMS upload, pending upload/list/confirm/**finalize**/delete/reprocess, and the separate final-invoice CRUD endpoints. |
 | `service/PendingInvoiceService.java` | Core pending-invoice + SMS-routing logic: `processSmsMessages`, `processStatusMessage`, `savePendingInvoice`, `confirmPendingInvoice`, **`finalizePendingInvoice`** (atomic pending → final, Section 10), `reprocessUnmatchedInvoices`. |
-| `utils/PythonInvoiceProcessor.java` | The only code that talks to the Python converter — `sendInvoiceToPython` (`/process-invoice`) and `reprocessMismatchedInvoices` (`/fix-mismatched`); also the code that self-POSTs results back into this backend's own pending-upload endpoint. |
+| `utils/PythonInvoiceProcessor.java` | The only code that talks to the Python converter — `sendInvoiceToPython` (`/process-invoice`) and `reprocessMismatchedInvoices` (`/fix-mismatched`); saves the parsed result **in-process** via `PendingInvoiceService.savePendingInvoice(...)` (no longer a self-POST — see Section 8). |
 | `dto/PendingInvoiceDTO.java` | Top-level shape exchanged with Python and with `/api/invoices/pending/upload`; matches Python's camelCase output field-for-field. |
 | `dto/PendingInvoiceItemDTO.java` | Item shape; its Java fields are **literally named `unit_price`/`total_price`** (snake_case), matching Python's item casing directly with no alias needed. |
 | `dto/SmsMessageDTO.java` | The shape Android's SMS upload payload is deserialized into (`type`, `content`, `receivedAt`). |
@@ -122,26 +122,61 @@ This matches the Android SMS uploader's actual payload shape exactly — no wrap
 - **Accepted fields:** `type` (String), `content` (String), `receivedAt` (String, ISO-8601 local date-time).
 - **Invoice/status branching:** `"invoice"`/`"status"` are compared case-insensitively (`equalsIgnoreCase`); everything routes through `PendingInvoiceService.processSmsMessages`.
 - **Empty-list behavior:** a `null` or empty array returns `400 Bad Request` with a plain string body.
-- **No enum validation for `type`:** confirmed — any value other than `"invoice"`/`"status"` (case-insensitive) is **silently ignored**; no error, no log entry, no rejection.
-- **`receivedAt` parsing:** done via an unguarded `LocalDateTime.parse(...)` — works with Android's actual format, but there is **no try/catch**, so a malformed value would throw an unhandled exception for that request.
-- **Response behavior:** `200 OK` with an **empty body** as long as the array itself wasn't empty — this is true regardless of whether any individual message inside it actually succeeded downstream.
+- **No enum validation for `type`:** any value other than `"invoice"`/`"status"` (case-insensitive) is skipped, but is no longer silent — it's counted in `unknownTypeMessages` and persisted as a `failed_invoice_imports` row with `failureReason = UNKNOWN_MESSAGE_TYPE` (see Section 5).
+- **`receivedAt` parsing:** for `"invoice"` messages, a malformed value is now caught and recorded (`failureReason = INVALID_RECEIVED_AT`, counted in `invoicesFailed`) instead of throwing unhandled. For `"status"` messages, the parse is wrapped in a per-message `try/catch` that counts `statusFailed` (but does not persist a `failed_invoice_imports` row — that table is invoice-import scoped, see Section 5). Either way, one bad message no longer aborts the rest of the batch.
+- **Response behavior:** `200 OK` with a **`SmsProcessingSummaryDTO`** body as long as the array itself wasn't empty — the response now reflects per-message outcomes instead of being an empty body:
+
+```json
+{
+  "totalMessages": 5,
+  "invoiceMessages": 3,
+  "statusMessages": 1,
+  "unknownTypeMessages": 1,
+  "invoicesProcessed": 1,
+  "invoicesSkippedInvalidUrl": 1,
+  "invoicesFailed": 1,
+  "statusProcessed": 1,
+  "statusFailed": 0,
+  "failedImportsRecorded": 3
+}
+```
+
+`failedImportsRecorded` counts how many `failed_invoice_imports` rows were actually written for this batch (see Section 5).
+
 - **Caller:** the Android SMS uploader app (`InvoiceSMSUploader`) — confirmed as the only known caller.
 
 ## 5. Invoice SMS Flow
 
 1. Android sends an `"invoice"`-type SMS entry (its `content` is the raw PDF URL, since Android itself already filtered for `startsWith("http")`).
 2. Backend receives it in `uploadSmsMessages` → `processSmsMessages` → recognizes `type == "invoice"`.
-3. Backend treats the **entire `content` string as the PDF URL**, with no extraction or validation logic.
-4. Backend calls Python: `PythonInvoiceProcessor.sendInvoiceToPython(content, smsReceivedAt)` → `POST https://invoices-convertor-1.onrender.com/process-invoice` with `{"url": content}`.
-5. Backend receives Python's parsed invoice JSON, deserialized directly into `PendingInvoiceDTO`.
-6. Backend saves it as a pending invoice — by setting `receivedAtSms` on the DTO and POSTing it (wrapped in a list) to its own `/api/invoices/pending/upload` endpoint.
-7. The invoice is now sitting in the `PendingInvoice` table, presumably to be reviewed later in the frontend.
+3. **Backend validates the URL** (`PendingInvoiceService.isValidInvoiceUrl`) before doing anything else: `content` must be non-blank and parse as a URI with an `http`/`https` scheme and a non-blank host. If it doesn't, Python is **never called** — the message is skipped, counted in `invoicesSkippedInvalidUrl`, and persisted as a `failed_invoice_imports` row with `failureReason = INVALID_INVOICE_URL` (see "Failed Invoice Import Persistence" below). This is a basic sanity check, not a full SSRF/private-IP blocker.
+4. If the URL is valid, the backend parses `receivedAt` into `smsReceivedAt`. If that parse fails, the message is skipped, counted in `invoicesFailed`, and persisted with `failureReason = INVALID_RECEIVED_AT`.
+5. Backend calls Python: `PythonInvoiceProcessor.sendInvoiceToPython(content, smsReceivedAt)` → `POST https://invoices-convertor-1.onrender.com/process-invoice` with `{"url": content}`.
+6. Backend receives Python's parsed invoice JSON, deserialized directly into `PendingInvoiceDTO`.
+7. Backend saves it as a pending invoice **in-process**, via `PendingInvoiceService.savePendingInvoice(...)` (this used to be a self-POST to `/api/invoices/pending/upload` — see Section 8) — counted in `invoicesProcessed`.
+8. If Python returns a non-2xx status, a null body, or the in-process save throws, the message is counted in `invoicesFailed` and persisted with `failureReason = PYTHON_PROCESSING_FAILED`.
+9. The invoice is now sitting in the `PendingInvoice` table, to be reviewed later in the frontend.
 
-**Risks confirmed in this flow:**
-- **No URL validation** — the backend never checks that `content` is a well-formed or reachable URL, or that it points to an actual invoice PDF, before handing it to Python.
-- **Python failure is swallowed** — any exception (Python down, non-2xx, timeout, JSON mapping failure) is caught by a blanket `try/catch` in `PythonInvoiceProcessor` and only `System.err`-logged; nothing is retried or queued.
-- **No retry/dead-letter queue exists** — confirmed by the absence of any such mechanism anywhere in this code path.
-- **Confirmed: Android receives `200 OK` from `/sms-invoices/upload` even when the individual Python call fails downstream**, because `processSmsMessages` has no return value and `uploadSmsMessages` doesn't inspect per-message outcomes — the HTTP response only reflects "the array wasn't empty," not "every message was successfully processed."
+**Current behavior for this flow:**
+- **URL validation now happens before Python is called** — invalid/blank/non-http(s)/hostless URLs never reach Python (step 3 above). This was previously a confirmed gap; it is fixed.
+- **Failures are now counted and visible, not silently swallowed:** every batch to `/api/invoices/sms-invoices/upload` returns a `SmsProcessingSummaryDTO` (Section 4) with per-outcome counts, and individual invoice-import failures are additionally persisted for later review (below).
+- **Still a real limitation:** an unreachable/failing Python service, or a save failure, still only produces a counted+persisted `PYTHON_PROCESSING_FAILED` record — there is still no automatic retry or dead-letter re-queueing; a failed import must be manually re-submitted (e.g. by re-sending the same SMS payload).
+
+### Failed Invoice Import Persistence
+
+When an `"invoice"`-type SMS cannot become a `PendingInvoice` (steps 3, 4, or 8 above), a row is saved to the **`failed_invoice_imports`** table (`FailedInvoiceImport` entity / `FailedInvoiceImportRepository`), so the failure is reviewable later instead of only appearing in logs or the upload response.
+
+- **`failureReason`** — one of:
+  - `INVALID_INVOICE_URL` — blank/malformed/non-http(s)/hostless content.
+  - `INVALID_RECEIVED_AT` — `receivedAt` failed to parse.
+  - `PYTHON_PROCESSING_FAILED` — Python returned a non-2xx status/null body, or the in-process save threw.
+  - `UNKNOWN_MESSAGE_TYPE` — `type` wasn't `"invoice"` or `"status"` (Section 4).
+- **`contentPreview`** — a truncated (≤512 char), trimmed preview of the original SMS content, not the full raw text — deliberately bounded and less exposed than storing the complete message.
+- **`urlHost`** — the host parsed from `content`, when parseable, to help identify the source at a glance without needing the full URL.
+- **`errorMessage`** — a truncated (≤1000 char) exception/detail message, when available.
+- **`createdAt`** — set automatically on insert.
+- **Review endpoint:** `GET /api/invoices/sms-import-failures?limit=50` — returns recent failures, newest first (`limit` is clamped server-side to a sane range).
+- **Status-message failures are NOT persisted here** — this table is scoped to invoice-import failures only; a failed status message is only counted (`statusFailed`), not recorded as a row.
 
 ## 6. Status SMS Flow
 
@@ -169,7 +204,7 @@ This matches the Android SMS uploader's actual payload shape exactly — no wrap
 
 **Timeout behavior:** none explicitly configured — a plain `new RestTemplate()` with default settings is used, so calls can block for however long the underlying HTTP client's defaults allow.
 
-**Error handling:** a single blanket `try/catch (Exception e)` wraps each call; failures are logged to `System.err` only and otherwise silently dropped — no exception propagates back to the original SMS-upload HTTP response.
+**Error handling:** a single blanket `try/catch (Exception e)` wraps each call in `PythonInvoiceProcessor`; `sendInvoiceToPython` returns `false` on any failure (non-2xx, null body, exception) instead of throwing. The **caller** (`PendingInvoiceService.processSmsMessages`) now counts that failure (`invoicesFailed`) and persists it (`failureReason = PYTHON_PROCESSING_FAILED`, Section 5) — so it's no longer silent. It still doesn't propagate as an HTTP error, though: `/api/invoices/sms-invoices/upload` still returns `200 OK`, with the failure reflected only in the `SmsProcessingSummaryDTO` body and the `failed_invoice_imports` table.
 
 **Does the backend expect Python to save anything?** No — the backend always persists the result itself afterward (see Section 8). Python is treated as a stateless transform step.
 
@@ -177,12 +212,17 @@ This matches the Android SMS uploader's actual payload shape exactly — no wrap
 
 ## 8. Pending Invoice Persistence
 
+**This section previously described a self-POST pattern (the backend calling its own production URL over HTTP to save a pending invoice). That has been replaced with a direct in-process call; the old endpoint is unchanged and still available.**
+
+### Current behavior
+
+`PythonInvoiceProcessor` (both `sendInvoiceToPython` and `reprocessMismatchedInvoices`) now saves a parsed `PendingInvoiceDTO` by calling **`PendingInvoiceService.savePendingInvoice(...)` directly, in-process** — no HTTP call, no network round-trip, and no dependency on this backend's own public URL being reachable from itself. The hardcoded self-save URL that used to exist for this no longer exists in the code.
+
 ```
 POST /api/invoices/pending/upload
 ```
 
-- **Why it still exists:** this is the backend's actual persistence mechanism for parsed pending invoices. It is **not legacy** — it is actively load-bearing today.
-- **Who calls it today:** the backend calls **itself**, over HTTP, from `PythonInvoiceProcessor` (both after a normal `/process-invoice` call and after a `/fix-mismatched` reprocess call). **Python no longer calls this endpoint directly** — that was true in an earlier version of the system but is not the current behavior.
+- **Still available, for backward compatibility / manual use.** `InvoiceController.uploadPendingInvoices` → `PendingInvoiceService.savePendingInvoices(...)` still exists and still works exactly as before — it's simply no longer on the hot path for SMS-driven invoice ingestion (that path is now in-process, above). Anything that still calls this endpoint directly (manual testing, an older client, etc.) is unaffected. **Python no longer calls this endpoint directly either** — that was true in an earlier version of the system but is not, and has not been for a while, the current behavior.
 - **How `PendingInvoiceService.savePendingInvoice` works:** maps the incoming DTO to a `PendingInvoice` entity, explicitly sets `date`, `confirmed = false`, `receivedAtSms`, and `reprocessedFromId`; for each item, resolves or creates a `Material` by description (see Section 12), then saves the whole aggregate via `PendingInvoiceRepository.save(...)`.
 - **`confirmed` behavior:** always forced to `false` on save, regardless of whatever value was in the incoming DTO.
 - **`receivedAtSms` behavior:** carried through explicitly from the caller (either the original SMS timestamp on first save, or copied forward from the original invoice during reprocessing) so the deep-link cutoff logic stays accurate even after a reprocess.
@@ -199,7 +239,7 @@ POST /api/invoices/pending/upload
 | `PATCH /api/invoices/pending/{id}/confirm` | Mark a pending invoice confirmed | Backward-compatible only — **not** the current frontend confirm path | **Only sets `confirmed = true`** on the same row; does **not** create a final invoice — see Section 10 |
 | `POST /api/invoices/pending/{id}/finalize` | **Atomically** create the final invoice from a pending invoice AND mark it confirmed | **The current frontend "confirm" action** (via `finalizePendingInvoice(id)`) | One transaction; see Section 10 for the full contract |
 | `DELETE /api/invoices/pending/{id}` | Remove a pending invoice | Frontend "reject/delete" action | Hard delete, no soft-delete/audit trail |
-| `POST /api/invoices/pending/fix-unmatched` | Trigger reprocessing of unconfirmed+mismatched invoices via Python | Frontend "reprocess" action (button or scheduled — unconfirmed) | See Section 13 for the duplicate-risk caveat |
+| `POST /api/invoices/pending/fix-unmatched` | Trigger reprocessing of unconfirmed+mismatched invoices via Python | Frontend "reprocess" action (button or scheduled — unconfirmed) | Skips originals that already have a reprocessed child — see Section 13 |
 | `GET /api/invoices/pending/latest-date` | Legacy: latest business date among pending invoices | Possibly deep-link building | Date-only |
 | `GET /api/invoices/pending/latest-business-datetime?onlyUnconfirmed=` | Latest business datetime among pending invoices | Possibly deep-link building | Business/parse time, not SMS-received time |
 | `GET /api/invoices/pending/latest-business-date?onlyUnconfirmed=` | Same, date-only | Possibly deep-link building | |
@@ -264,13 +304,18 @@ Per the frontend README, the frontend has switched its pending-confirmation flow
 POST /api/invoices/pending/fix-unmatched
 ```
 
+**This section previously documented a confirmed duplicate-creation bug on repeated calls to this endpoint. That has been fixed.**
+
 1. Backend selects candidate pending invoices via `PendingInvoiceRepository.findByConfirmedFalseAndTotalMatchFalse()`, then filters to those with a non-empty `pdfUrl` and a `null` `reprocessedFromId`.
-2. Backend calls Python `POST /fix-mismatched` for each candidate, with request body `{"url": pdfUrl, "originalId": <pending invoice's own id>}`.
-3. The JSON Python returns is saved as a **new** pending invoice, via the same self-POST to `/api/invoices/pending/upload` used elsewhere.
-4. **The old pending invoice is not deleted or updated** — it remains exactly as it was in the database.
-5. **`reprocessedFromId`** on the new row links it back to the original invoice's ID — informational only, nothing reads it to suppress future reprocessing of the original.
-6. **Confirmed duplicate risk:** because the original invoice's own `reprocessedFromId` stays `null` forever (it's the source, not a result), it will continue to match the `reprocessedFromId == null` filter on every subsequent call to this endpoint — meaning **repeated calls to `/api/invoices/pending/fix-unmatched` will keep re-sending the same still-mismatched original invoices to Python and creating a new duplicate pending invoice each time**, with no cleanup of earlier attempts.
-7. **The frontend audit needs to confirm how/when this endpoint is actually triggered** — a one-off admin action, a button a user can click repeatedly, or something scheduled — since that materially affects how quickly the duplicate-accumulation risk above becomes a real problem in practice.
+2. **Fixed:** the backend additionally excludes any candidate whose `id` already appears as another row's `reprocessedFromId` (`PendingInvoiceRepository.findAllReprocessedFromIds()`) — i.e., an original that already has a reprocessed child is skipped. An original mismatched invoice is now reprocessed **at most once**; repeated calls to this endpoint no longer re-send the same already-reprocessed originals to Python.
+3. Backend calls Python `POST /fix-mismatched` for each remaining candidate, with request body `{"url": pdfUrl, "originalId": <pending invoice's own id>}`.
+4. The JSON Python returns is saved as a **new** pending invoice, **in-process** via `PendingInvoiceService.savePendingInvoice(...)` (no longer a self-POST — see Section 8).
+5. **`reprocessedFromId`** on the new row links it back to the original invoice's ID — this is exactly the field the new skip-check (step 2) reads to avoid re-reprocessing it.
+
+**Remaining limitations (not addressed by the fix above):**
+- **The old (original) pending invoice is still not deleted or updated** — it remains in the database exactly as it was, alongside its new reprocessed child, even though it will never be selected for reprocessing again. There is no cleanup/archival of superseded originals.
+- **The reprocess lifecycle is still basic, single-generation:** if the *reprocessed child* itself still comes back `totalMatch = false`, nothing reprocesses it again either (it has a non-null `reprocessedFromId`, so it's excluded from the "original" candidate pool by the pre-existing filter in step 1). There's no multi-generation retry chain.
+- **There is still no per-invoice reprocess endpoint or UI action.** This remains a single batch operation over all eligible unconfirmed+mismatched invoices — a user cannot ask to reprocess just one specific pending invoice.
 
 ## 14. Deep-Link Timestamp Support
 
@@ -319,52 +364,63 @@ description, quantity, unit_price, total_price, materialId
 | Scenario | Confirmed behavior |
 |---|---|
 | Empty Android SMS list | `400 Bad Request`, plain string body |
-| Unknown `type` value | Silently ignored — no error, no log |
-| Malformed `receivedAt` | Unguarded `LocalDateTime.parse(...)` throws unhandled — likely fails the whole request |
-| Invalid invoice URL (well-formed but not a real invoice) | No validation; passed straight to Python, which will fail on its own and have that failure swallowed here |
-| Python unavailable | Caught by a blanket `try/catch`, logged to `System.err`, silently dropped |
-| Python returns 400/500 | Same blanket catch — `RestTemplate` throws on non-2xx, caught, logged, dropped |
-| Backend's self-save call to its own `/pending/upload` fails | Also caught by the same outer `try/catch` in `PythonInvoiceProcessor` — silently dropped |
-| Duplicate SMS upload (same content sent twice) | **No server-side dedup exists** — both `PendingInvoice` and `StatusMessage` rows are created again independently |
-| `totalMatch = false` returned from Python | Saved as-is; the invoice becomes eligible for `/pending/fix-unmatched` reprocessing |
-| Reprocess duplicate behavior | Confirmed — see Section 13; repeated reprocessing accumulates duplicate rows |
-| Confirming an invalid/incomplete pending invoice | Only blocked if already `confirmed = true`; no check on data completeness (missing worksite, `totalMatch = false`, etc.) |
+| Unknown `type` value | **Fixed:** counted (`unknownTypeMessages`) and persisted (`failed_invoice_imports`, `UNKNOWN_MESSAGE_TYPE`) — no longer silent |
+| Malformed `receivedAt` (invoice message) | **Fixed:** caught, counted (`invoicesFailed`), persisted (`INVALID_RECEIVED_AT`) — no longer throws unhandled |
+| Malformed `receivedAt` (status message) | Caught per-message, counted (`statusFailed`) — not persisted to `failed_invoice_imports` (that table is invoice-import scoped) |
+| Malformed/non-http(s) invoice URL | **Fixed:** validated before Python is called — skipped, counted (`invoicesSkippedInvalidUrl`), persisted (`INVALID_INVOICE_URL`); Python is never invoked |
+| Well-formed `http(s)` URL that isn't actually an invoice PDF | Still no deep validation — passed to Python, which fails on its own; the failure comes back as `invoicesFailed`/`PYTHON_PROCESSING_FAILED` |
+| Python unavailable | Caught by a blanket `try/catch`; **now counted (`invoicesFailed`) and persisted (`PYTHON_PROCESSING_FAILED`)** — no longer silent, though still no automatic retry |
+| Python returns 400/500 | Same as above — `RestTemplate` throws on non-2xx, caught, counted, persisted |
+| In-process pending-invoice save fails (e.g. a data constraint violation) | Caught by the same outer `try/catch` in `PythonInvoiceProcessor`; counted (`invoicesFailed`) and persisted with the same `PYTHON_PROCESSING_FAILED` reason (this failure reason currently covers both "Python failed" and "our own save failed") |
+| Duplicate SMS upload (same content sent twice) | **Still no server-side dedup** — both `PendingInvoice` and `StatusMessage` rows are created again independently |
+| `totalMatch = false` returned from Python | Saved as-is; the invoice becomes eligible for `/pending/fix-unmatched` reprocessing (now reprocessed at most once per original — see Section 13) |
+| Reprocessing an already-reprocessed original | **Fixed:** skipped — see Section 13 |
+| Confirming an invalid/incomplete pending invoice via `/confirm` or `/finalize` | Only blocked if already `confirmed = true` (`404`/`409` for `/finalize`); neither endpoint checks data completeness (missing worksite, `totalMatch = false`, etc.) |
 
-**Risks/unknowns (not directly confirmable from code alone):** real-world frequency of malformed `receivedAt` values from Android; actual timezone behavior in production; whether `/pending/fix-unmatched` is triggered often enough for the duplicate-accumulation risk to matter in practice.
+**Risks/unknowns (not directly confirmable from code alone):** real-world frequency of malformed `receivedAt` values from Android; actual timezone behavior in production; whether `failed_invoice_imports` rows are ever reviewed/acted upon in practice, or just accumulate unread.
 
 ## 17. Configuration / Security Notes
 
-- **Python converter URL:** hardcoded string literals in `PythonInvoiceProcessor.java` — not sourced from `application.properties` or any environment variable.
-- **Backend self-save URL:** also hardcoded in the same file, pointing at this backend's own production URL — meaning even a local/dev backend instance calling this code path would round-trip through the production save endpoint unless manually changed.
-- **Hardcoded URL concern:** both of the above are a legitimate configuration fragility — there's no single place to change environments (dev/staging/prod) for the Python integration.
+- **Python converter URL:** hardcoded string literals in `PythonInvoiceProcessor.java` — not sourced from `application.properties` or any environment variable. **Still true.**
+- **Backend self-save URL — removed.** The backend no longer self-POSTs to its own production URL to save pending invoices (Section 8); that hardcoded URL and the HTTP round-trip it required no longer exist in this code path.
+- **Hardcoded URL concern (narrowed):** the Python base URL is still a legitimate configuration fragility — there's no single place to change environments (dev/staging/prod) for the Python integration. The previous concern about the backend's own hardcoded self-save URL no longer applies.
 - **Committed `application.properties`** uses environment-variable-driven configuration for the database, port, and upload paths (e.g., `${MYSQLHOST:localhost}`, `${PORT:8080}`, `${APP_UPLOADS_ROOT:uploads}`) — this is the properly portable, deployable configuration.
 - **Local/machine-specific `application.properties` changes:** this working copy may contain local, machine-specific, or otherwise sensitive values that differ from the committed version (per the project owner's note that this file is edited across multiple personal machines). These local values were **not modified, staged, or unstaged** as part of this documentation update, and are **not treated as part of the invoice feature** unless they affect documented runtime behavior — they don't. Care should be taken not to accidentally commit machine-specific or sensitive local changes to this file.
 - **Endpoints appear unauthenticated:** confirmed — no Spring Security filter chain is active in this project (the security starter dependency is present in `pom.xml` but commented out), and no endpoint in the invoice/SMS/Python flow has any auth annotation or header check.
 - **CORS is fully open:** confirmed — `CorsConfig` registers `allowedOrigins("*")` for `GET/POST/PUT/DELETE` across the entire API.
-- **`/api/invoices/pending/upload` is public and load-bearing:** confirmed — it has no additional protection despite being the backend's actual persistence mechanism for pending invoices (called both externally, in principle, and internally by the backend itself).
+- **`/api/invoices/pending/upload` is public and still unprotected:** it's no longer the backend's primary persistence path for SMS-driven invoices (that's now in-process, Section 8), but it remains a live, unauthenticated endpoint that will persist any `PendingInvoiceDTO` payload posted to it directly.
 - **No API key or auth exists between this backend and the Python converter** in either direction — confirmed; the Python service itself also requires none (per its own audit).
 
 ## 18. Tests
 
-- **Existing tests:** exactly one — the default Spring Boot–generated `IntFitBackendApplicationTests.contextLoads()`, which only verifies the application context starts. No assertions about invoice/SMS/Python behavior exist.
-- **Missing:** tests for the SMS upload endpoint and `SmsMessageDTO` mapping; tests for the Python integration (`PythonInvoiceProcessor`, even with a mocked `RestTemplate`); tests for pending-invoice save (`savePendingInvoice`); tests for the reprocess/fix-mismatched flow (which would have caught the duplicate-reprocessing behavior in Section 13); tests for pending→final invoice behavior (there being none to test is itself notable, see Section 10); tests for field-casing compatibility between Python and the DTOs; tests for worksite matching (`normalizeWorksiteName`, `findByName`); tests for material matching (`NameCleaner`, `findByNameIgnoreCase` vs. `findByName`).
+**Test database — fixed.** Tests now run against an **in-memory H2 database**, not the Railway/production MySQL instance. `IntFitBackendApplicationTests` is annotated `@ActiveProfiles("test")`, which activates `src/test/resources/application-test.properties` — an H2 datasource (MySQL-compatibility mode, so the MySQL-specific `LONGTEXT`/`TEXT` column definitions on some entities still work) with `spring.jpa.hibernate.ddl-auto=create-drop`, fully isolated from any real database. Running `./mvnw test` (or `-q test`) is now safe locally and in CI — it will not touch production data.
+
+- **Existing tests:** still exactly one — `IntFitBackendApplicationTests.contextLoads()`. It's still the only test, but it's no longer a production-DB risk, and it's a genuinely useful startup/schema smoke test: it fails if any entity (including the new `FailedInvoiceImport`) can't be mapped to a schema, or if the Spring context — including the `PythonInvoiceProcessor` ↔ `PendingInvoiceService` circular dependency broken via `@Lazy` — fails to wire up.
+- **Still missing:** tests for the SMS upload endpoint and `SmsMessageDTO` mapping; tests for the Python integration (`PythonInvoiceProcessor`, even with a mocked `RestTemplate`); tests for pending-invoice save (`savePendingInvoice`); tests for the reprocess "skip already-reprocessed" logic (Section 13); tests for the atomic finalize endpoint (Section 10) and its transactional rollback behavior; tests for URL validation (`isValidInvoiceUrl`) and failed-import persistence (Section 5); tests for field-casing compatibility between Python and the DTOs; tests for worksite matching (`normalizeWorksiteName`, `findByName`); tests for material matching (`NameCleaner`, `findByNameIgnoreCase` vs. `findByName`).
 
 ## 19. Known Risks / Technical Debt
 
 | Issue | Category |
 |---|---|
-| `PythonInvoiceProcessor` calls this backend's own production save endpoint over HTTP (self-POST) instead of an in-process call | **Architecture risk** |
 | No worksite matching/resolution happens anywhere in the pending-invoice save path | **Missing validation** |
-| Repeated calls to `/api/invoices/pending/fix-unmatched` create duplicate pending invoices without cleaning up originals | **Confirmed bug** |
 | Material matching differs between the pending path (raw, case-insensitive) and the final-invoice path (`NameCleaner`-normalized, exact) | **Maintainability issue** |
-| No server-side deduplication of repeated/duplicate SMS uploads | **Missing validation** |
-| No validation that SMS `content` is a well-formed or reachable URL before calling Python | **Missing validation** |
-| Python/self-save failures are caught by a blanket `try/catch` and only logged — never surfaced, retried, or queued | **Weak error handling** |
-| Python base URL and backend self-save URL are both hardcoded string literals | **Security/config concern** |
+| No server-side deduplication of repeated/duplicate SMS uploads (same content/timestamp can be saved twice) | **Missing validation** |
+| No retry or dead-letter re-queueing for a failed invoice import — a `PYTHON_PROCESSING_FAILED` row must be manually re-submitted | **Weak error handling** |
+| No pending-invoice edit endpoint — a pending invoice can only be confirmed/finalized or deleted, never corrected in place | **Missing validation** |
+| Status-message processing failures are counted (`statusFailed`) but not persisted anywhere for later review, unlike invoice failures | **Missing validation** |
+| Reprocessing has no per-invoice trigger/UI and no cleanup of superseded original rows (Section 13) | **Maintainability issue** |
+| Python base URL is a hardcoded string literal, not environment-configured | **Security/config concern** |
 | All invoice/SMS endpoints are unauthenticated with fully open CORS | **Security/config concern** |
-| Only one trivial context-load test exists for the entire application | **Maintainability issue** |
+| Only one automated test exists (`contextLoads`) — no coverage of SMS processing, URL validation, reprocessing, or the finalize endpoint | **Maintainability issue** |
 
-*(The previous "no backend path from PendingInvoice to final Invoice" risk documented here has been fixed — see Section 10.)*
+**Fixed since the last update to this document** (kept here for traceability, not as current risks):
+- ~~`PythonInvoiceProcessor` self-POSTs to this backend's own production URL~~ — now saves in-process via `PendingInvoiceService` (Section 8).
+- ~~Repeated `/pending/fix-unmatched` calls create duplicate pending invoices~~ — originals with an existing reprocessed child are now skipped (Section 13).
+- ~~No validation that SMS `content` is a well-formed URL before calling Python~~ — now validated; invalid URLs are skipped before Python is called (Section 5).
+- ~~Invoice processing failures are silently swallowed~~ — now counted (`SmsProcessingSummaryDTO`) and persisted (`failed_invoice_imports`) — see Section 5.
+- ~~No visibility into failed invoice imports~~ — reviewable via `GET /api/invoices/sms-import-failures` (Section 5).
+- ~~Tests connect to the Railway/production database~~ — tests now use an isolated H2 profile (Section 18).
+- ~~No backend path from `PendingInvoice` to final `Invoice`~~ — see Section 10.
 
 ## 20. Open Frontend Questions
 
@@ -382,12 +438,13 @@ description, quantity, unit_price, total_price, materialId
 
 ## 21. Quick Reference
 
-- **Android upload endpoint:** `POST /api/invoices/sms-invoices/upload`
+- **Android upload endpoint:** `POST /api/invoices/sms-invoices/upload` — now returns a `SmsProcessingSummaryDTO` (counts of processed/skipped/failed messages), not an empty `200 OK` (Section 4).
 - **Python endpoints called by this backend:** `POST /process-invoice`, `POST /fix-mismatched` (base URL hardcoded in `PythonInvoiceProcessor.java`)
-- **Pending invoice persistence endpoint:** `POST /api/invoices/pending/upload` (self-called by this backend, not by Python)
-- **Pending invoice management:** `GET /api/invoices/pending`, **`POST /api/invoices/pending/{id}/finalize` (current, atomic confirm path)**, `PATCH /api/invoices/pending/{id}/confirm` (old, backward-compatible only), `DELETE /api/invoices/pending/{id}`, `POST /api/invoices/pending/fix-unmatched`
+- **Pending invoice save is in-process:** `PythonInvoiceProcessor` calls `PendingInvoiceService.savePendingInvoice(...)` directly (Section 8) — no more self-POST. `POST /api/invoices/pending/upload` **remains available** for backward-compatible/manual use.
+- **Failed invoice import review:** `GET /api/invoices/sms-import-failures?limit=50` — recent invoice-import failures, newest first (Section 5).
+- **Pending invoice management:** `GET /api/invoices/pending`, **`POST /api/invoices/pending/{id}/finalize` (current, atomic confirm path)**, `PATCH /api/invoices/pending/{id}/confirm` (old, backward-compatible only), `DELETE /api/invoices/pending/{id}`, `POST /api/invoices/pending/fix-unmatched` (now skips already-reprocessed originals — Section 13)
 - **Deep-link timestamp helpers:** `GET /api/invoices/pending/latest-sms-datetime`, `GET /api/invoices/pending/latest-business-datetime`, `GET /api/status-messages/latest-saved-date`
 - **Status message endpoints:** `GET /api/status-messages`, `GET /api/status-messages/latest-20`, `GET /api/status-messages/unassigned`, `GET /api/status-messages/by-worksite/{worksiteId}`, `PATCH /api/status-messages/{id}/assign/{worksiteId}`, `PATCH /api/status-messages/{id}/unassign`, `POST /api/status-messages/{id}/apply`, `GET /api/status-messages/since-latest-balance`, `DELETE /api/status-messages/{id}`
 
 **Key mental model:**
-Android sends raw SMS → Backend calls Python → Python returns JSON → Backend saves the result as a PendingInvoice → Frontend reviews it → Frontend calls the backend's `POST /api/invoices/pending/{id}/finalize` → Backend creates the final Invoice and confirms the pending invoice atomically, in one transaction.
+Android sends raw SMS → Backend validates the URL, then calls Python → Python returns JSON → Backend saves the result as a PendingInvoice **in-process** (invalid URLs and processing failures are counted and persisted for review) → Frontend reviews it → Frontend calls the backend's `POST /api/invoices/pending/{id}/finalize` → Backend creates the final Invoice and confirms the pending invoice atomically, in one transaction.
