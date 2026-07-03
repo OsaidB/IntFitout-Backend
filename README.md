@@ -4,12 +4,12 @@
 
 This is the Spring Boot backend for the Interior Fitout system. Among its many responsibilities (worksites, materials, payroll, closeouts, etc.), this document focuses specifically on its **invoice-processing role**, which spans:
 
-- **Final invoice management** — `Invoice`/`InvoiceItem` entities, created via `POST /api/invoices` or `/api/invoices/manual`, queried by worksite/date.
-- **Pending invoice workflow** — a staging area (`PendingInvoice`/`PendingInvoiceItem`) for invoices that have been parsed but not yet reviewed/approved.
+- **Final invoice management** — `Invoice`/`InvoiceItem` entities. Created either directly via `POST /api/invoices` / `/api/invoices/manual`, or — as of the atomic finalize endpoint — derived from a `PendingInvoice` via `POST /api/invoices/pending/{id}/finalize`. Queried by worksite/date.
+- **Pending invoice workflow** — a staging area (`PendingInvoice`/`PendingInvoiceItem`) for invoices that have been parsed but not yet reviewed/approved, with an **atomic finalize endpoint** that converts a pending invoice into a confirmed final invoice in one transaction (see Section 10).
 - **SMS invoice ingestion** — receiving raw SMS payloads from the Android SMS uploader app and routing them by type.
 - **Status-message ingestion** — parsing non-invoice SMS text (balances, payments, returns, order confirmations) into a separate `StatusMessage` table.
 - **Python converter bridge** — this backend, not Android and not Python itself, is the component that calls the external Python PDF-to-JSON converter and persists its output.
-- **Frontend approval workflow (expected, not yet confirmed)** — pending invoices are presumably listed, reviewed, corrected, and confirmed/rejected somewhere in the frontend; the exact mechanics of that are **out of scope for this backend audit** and require a separate frontend audit (see [Section 20](#20-open-frontend-questions)).
+- **Frontend approval workflow** — the frontend lists/reviews pending invoices and, per the frontend team, now calls this backend's `POST /api/invoices/pending/{id}/finalize` to confirm one. See Section 10 for what this endpoint guarantees.
 
 ## 2. Role in the Larger Invoice Flow
 
@@ -35,7 +35,14 @@ Backend saves the result as a PendingInvoice
 Frontend lists/reviews pending invoices  (GET /api/invoices/pending)
         │
         ▼
-User confirms / deletes / reprocesses pending invoices
+User confirms a pending invoice
+        │  POST /api/invoices/pending/{id}/finalize
+        ▼
+Backend atomically creates the final Invoice AND marks the
+PendingInvoice confirmed = true, in one transaction  (see Section 10)
+        │
+        ▼
+(user may also delete / reprocess pending invoices via the other endpoints)
 ```
 
 **Status flow (independent of the invoice flow above):**
@@ -59,7 +66,7 @@ Important clarifications, stated plainly:
 - **Android does not call Python.** It only ever talks to this backend's SMS upload endpoint.
 - **Python does not save to this backend.** It returns JSON in its HTTP response and nothing else; it has no knowledge of this backend's database or endpoints.
 - **This backend is the bridge** — it is the only component that talks to both Android (as a receiver) and Python (as a caller).
-- **Frontend behavior beyond "list pending invoices" is not yet confirmed from this repo.** Whether/how a confirmed pending invoice becomes a final `Invoice`, how worksite correction happens, and how the Android deep link is actually built are all open questions for the frontend audit (Sections 10, 11, 20).
+- **The pending → final invoice path is now a solved, atomic backend operation** (`POST /api/invoices/pending/{id}/finalize`, Section 10) — this was previously an open question in this document; it no longer is, regardless of exactly how/when the frontend calls it. How worksite correction happens and how the Android deep link is actually built remain frontend-side details (Sections 11, 20).
 
 ## 3. Backend Project Structure
 
@@ -67,8 +74,8 @@ Files/classes directly involved in the invoice/SMS/Python flow:
 
 | File / Class | Responsibility |
 |---|---|
-| `controller/InvoiceController.java` | All invoice + pending-invoice HTTP endpoints — SMS upload, pending upload/list/confirm/delete/reprocess, and the separate final-invoice CRUD endpoints. |
-| `service/PendingInvoiceService.java` | Core pending-invoice + SMS-routing logic: `processSmsMessages`, `processStatusMessage`, `savePendingInvoice`, `confirmPendingInvoice`, `reprocessUnmatchedInvoices`. |
+| `controller/InvoiceController.java` | All invoice + pending-invoice HTTP endpoints — SMS upload, pending upload/list/confirm/**finalize**/delete/reprocess, and the separate final-invoice CRUD endpoints. |
+| `service/PendingInvoiceService.java` | Core pending-invoice + SMS-routing logic: `processSmsMessages`, `processStatusMessage`, `savePendingInvoice`, `confirmPendingInvoice`, **`finalizePendingInvoice`** (atomic pending → final, Section 10), `reprocessUnmatchedInvoices`. |
 | `utils/PythonInvoiceProcessor.java` | The only code that talks to the Python converter — `sendInvoiceToPython` (`/process-invoice`) and `reprocessMismatchedInvoices` (`/fix-mismatched`); also the code that self-POSTs results back into this backend's own pending-upload endpoint. |
 | `dto/PendingInvoiceDTO.java` | Top-level shape exchanged with Python and with `/api/invoices/pending/upload`; matches Python's camelCase output field-for-field. |
 | `dto/PendingInvoiceItemDTO.java` | Item shape; its Java fields are **literally named `unit_price`/`total_price`** (snake_case), matching Python's item casing directly with no alias needed. |
@@ -189,7 +196,8 @@ POST /api/invoices/pending/upload
 | Endpoint | Purpose | Likely frontend caller | Notable behavior |
 |---|---|---|---|
 | `GET /api/invoices/pending` | List all pending invoices | Frontend pending-invoice review screen | Eager-loads items + materials via a `JOIN FETCH` query |
-| `PATCH /api/invoices/pending/{id}/confirm` | Mark a pending invoice confirmed | Frontend "confirm" action | **Only sets `confirmed = true`** on the same row — see Section 10 |
+| `PATCH /api/invoices/pending/{id}/confirm` | Mark a pending invoice confirmed | Backward-compatible only — **not** the current frontend confirm path | **Only sets `confirmed = true`** on the same row; does **not** create a final invoice — see Section 10 |
+| `POST /api/invoices/pending/{id}/finalize` | **Atomically** create the final invoice from a pending invoice AND mark it confirmed | **The current frontend "confirm" action** (via `finalizePendingInvoice(id)`) | One transaction; see Section 10 for the full contract |
 | `DELETE /api/invoices/pending/{id}` | Remove a pending invoice | Frontend "reject/delete" action | Hard delete, no soft-delete/audit trail |
 | `POST /api/invoices/pending/fix-unmatched` | Trigger reprocessing of unconfirmed+mismatched invoices via Python | Frontend "reprocess" action (button or scheduled — unconfirmed) | See Section 13 for the duplicate-risk caveat |
 | `GET /api/invoices/pending/latest-date` | Legacy: latest business date among pending invoices | Possibly deep-link building | Date-only |
@@ -197,15 +205,41 @@ POST /api/invoices/pending/upload
 | `GET /api/invoices/pending/latest-business-date?onlyUnconfirmed=` | Same, date-only | Possibly deep-link building | |
 | `GET /api/invoices/pending/latest-sms-datetime?onlyUnconfirmed=` | Latest **real SMS-received** timestamp among pending invoices | Most likely source of Android's `lastPendingAt` | Reads `receivedAtSms`, not `date`/`parsedAt` |
 
-## 10. Confirmation and Final Invoice Gap
+## 10. Confirmation and Final Invoice Path (Gap Fixed)
 
-This is an important, deliberately-cautious finding:
+**This section used to document an open architectural gap. That gap has been fixed with a new endpoint; the old finding is kept below for history, followed by the current behavior.**
 
-- **Confirming a pending invoice currently only flips `confirmed = true`** on the existing `PendingInvoice` row (`PendingInvoiceService.confirmPendingInvoice`). It updates nothing else and creates nothing else.
-- **This backend audit did not find any backend code path that converts a confirmed `PendingInvoice` into a final `Invoice`.** No service method, no event listener, and no scheduled job in this codebase reads confirmed `PendingInvoice` rows and creates corresponding `Invoice`/`InvoiceItem` rows.
-- **Final `Invoice` creation exists only through separate endpoints** — `POST /api/invoices` and `POST /api/invoices/manual` (`InvoiceService.saveInvoice`/`saveManualInvoice`) — which are not called from anywhere in the pending-invoice code.
-- **This does not necessarily mean the feature is broken.** It's entirely possible the frontend calls `POST /api/invoices` (or `/manual`) itself, using the reviewed/edited pending-invoice data, immediately after or instead of calling the confirm endpoint. **This has not been confirmed either way** — it requires the frontend audit.
-- **Until the frontend is checked, whether "confirm" alone is suffic to finalize an invoice, or whether a second explicit step is required, is an open architectural question** — not a confirmed bug.
+### What used to be true
+
+- Confirming a pending invoice only flipped `confirmed = true` on the existing `PendingInvoice` row (`PendingInvoiceService.confirmPendingInvoice`) — it updated nothing else and created nothing else.
+- No backend code path converted a confirmed `PendingInvoice` into a final `Invoice`. Final `Invoice` creation only existed through the separate `POST /api/invoices` / `POST /api/invoices/manual` endpoints, which nothing in the pending-invoice code called.
+- Whether the frontend closed this gap itself (by calling `POST /api/invoices` immediately after confirming) was an open question for the frontend audit.
+
+### Current behavior
+
+```
+POST /api/invoices/pending/{id}/finalize
+```
+
+This endpoint (`PendingInvoiceService.finalizePendingInvoice`) does both of the following **in one database transaction**:
+1. Builds an `InvoiceDTO` from the `PendingInvoice`'s current fields (`date`, `netTotal`, `total`, `worksiteId`, `worksiteName`, `totalMatch` → `total_match`, `pdfUrl`, `parsedAt`, `reprocessedFromId`, and items) and calls the same `InvoiceService.saveInvoice(...)` logic the old `POST /api/invoices` endpoint uses — so worksite/material matching behavior for the resulting final invoice is identical to before.
+2. Marks the source `PendingInvoice` row `confirmed = true`.
+
+**Response contract:**
+
+| Outcome | Status | Body |
+|---|---|---|
+| Success | `200 OK` | The created `InvoiceDTO` |
+| Pending invoice not found | `404 Not Found` | Plain error message |
+| Pending invoice already confirmed | `409 Conflict` | Plain error message |
+
+**Atomicity guarantee:** `finalizePendingInvoice` and the `InvoiceService.saveInvoice` it calls are both `@Transactional` with the default `REQUIRED` propagation, so the invoice-save call joins the same transaction as the confirm step rather than opening a second one. If creating the final invoice fails, the pending invoice is **not** marked confirmed (the whole transaction rolls back); if marking it confirmed fails, the just-created final invoice is rolled back too. There is no window where a final invoice can exist without its source pending invoice being confirmed, or vice versa.
+
+**The old two-endpoint flow is still available, unchanged, for backward compatibility:**
+- `POST /api/invoices` — still creates a final invoice directly; still used by any caller that isn't going through a pending invoice (e.g. manual creation, or older integrations).
+- `PATCH /api/invoices/pending/{id}/confirm` — still just flips the `confirmed` flag with no invoice creation; **no longer the path the frontend's pending-review screens use for confirmation**, per the frontend team.
+
+Per the frontend README, the frontend has switched its pending-confirmation flow to call `finalizePendingInvoice(id)` → this endpoint exclusively, and no longer performs the old two-call `POST /api/invoices` + `PATCH /confirm` sequence.
 
 ## 11. Worksite Matching
 
@@ -320,7 +354,6 @@ description, quantity, unit_price, total_price, materialId
 | Issue | Category |
 |---|---|
 | `PythonInvoiceProcessor` calls this backend's own production save endpoint over HTTP (self-POST) instead of an in-process call | **Architecture risk** |
-| No backend code path found converting a confirmed `PendingInvoice` into a final `Invoice` | **Unknown, pending frontend audit** |
 | No worksite matching/resolution happens anywhere in the pending-invoice save path | **Missing validation** |
 | Repeated calls to `/api/invoices/pending/fix-unmatched` create duplicate pending invoices without cleaning up originals | **Confirmed bug** |
 | Material matching differs between the pending path (raw, case-insensitive) and the final-invoice path (`NameCleaner`-normalized, exact) | **Maintainability issue** |
@@ -331,13 +364,15 @@ description, quantity, unit_price, total_price, materialId
 | All invoice/SMS endpoints are unauthenticated with fully open CORS | **Security/config concern** |
 | Only one trivial context-load test exists for the entire application | **Maintainability issue** |
 
+*(The previous "no backend path from PendingInvoice to final Invoice" risk documented here has been fixed — see Section 10.)*
+
 ## 20. Open Frontend Questions
 
 1. Who builds the Android deep link (`baba.intfit.sms_uploader://extract?...`) — is it the frontend, using the `latest-sms-datetime`/`latest-saved-date` endpoints documented in Section 14?
 2. Which screen lists pending invoices, and does it call `GET /api/invoices/pending` directly?
 3. How are pending invoices edited before confirmation — is there a PUT/PATCH endpoint expected that doesn't currently exist for `PendingInvoice`?
-4. What does the "confirm" button in the frontend actually do — does it call only `PATCH /api/invoices/pending/{id}/confirm`, or does it also call `POST /api/invoices` (or `/manual`) to create the final invoice?
-5. If it calls both, in what order, and what happens if the second call fails after the first succeeds?
+4. ~~What does the "confirm" button in the frontend actually do...~~ — **Resolved:** per the frontend README, it now calls `POST /api/invoices/pending/{id}/finalize` exclusively (Section 10). It no longer calls `PATCH /confirm` or `POST /api/invoices` separately.
+5. ~~If it calls both, in what order, and what happens if the second call fails...~~ — **Resolved:** it no longer calls both; the new endpoint is atomic, so this failure window no longer applies to pending confirmation.
 6. How is a worksite assigned or corrected for a pending invoice, given no backend endpoint for that currently exists?
 7. How does the frontend handle material matching/editing for pending-invoice items — does it expose the raw, uncleaned material names created by the pending-invoice path?
 8. How is `totalMatch = false` surfaced to the user, and does the frontend distinguish it from a fully-matched invoice?
@@ -350,9 +385,9 @@ description, quantity, unit_price, total_price, materialId
 - **Android upload endpoint:** `POST /api/invoices/sms-invoices/upload`
 - **Python endpoints called by this backend:** `POST /process-invoice`, `POST /fix-mismatched` (base URL hardcoded in `PythonInvoiceProcessor.java`)
 - **Pending invoice persistence endpoint:** `POST /api/invoices/pending/upload` (self-called by this backend, not by Python)
-- **Pending invoice management:** `GET /api/invoices/pending`, `PATCH /api/invoices/pending/{id}/confirm`, `DELETE /api/invoices/pending/{id}`, `POST /api/invoices/pending/fix-unmatched`
+- **Pending invoice management:** `GET /api/invoices/pending`, **`POST /api/invoices/pending/{id}/finalize` (current, atomic confirm path)**, `PATCH /api/invoices/pending/{id}/confirm` (old, backward-compatible only), `DELETE /api/invoices/pending/{id}`, `POST /api/invoices/pending/fix-unmatched`
 - **Deep-link timestamp helpers:** `GET /api/invoices/pending/latest-sms-datetime`, `GET /api/invoices/pending/latest-business-datetime`, `GET /api/status-messages/latest-saved-date`
 - **Status message endpoints:** `GET /api/status-messages`, `GET /api/status-messages/latest-20`, `GET /api/status-messages/unassigned`, `GET /api/status-messages/by-worksite/{worksiteId}`, `PATCH /api/status-messages/{id}/assign/{worksiteId}`, `PATCH /api/status-messages/{id}/unassign`, `POST /api/status-messages/{id}/apply`, `GET /api/status-messages/since-latest-balance`, `DELETE /api/status-messages/{id}`
 
 **Key mental model:**
-Android sends raw SMS. Backend calls Python. Python returns JSON. Backend saves the result as a pending invoice (by calling itself). Frontend approval/finalization into a real invoice still needs verification.
+Android sends raw SMS → Backend calls Python → Python returns JSON → Backend saves the result as a PendingInvoice → Frontend reviews it → Frontend calls the backend's `POST /api/invoices/pending/{id}/finalize` → Backend creates the final Invoice and confirms the pending invoice atomically, in one transaction.
