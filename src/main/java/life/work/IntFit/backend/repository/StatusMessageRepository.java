@@ -18,6 +18,10 @@ public interface StatusMessageRepository extends JpaRepository<StatusMessage, Lo
     // Efficient latest one
     Optional<StatusMessage> findTopByOrderByReceivedAtDesc();
 
+    // Newest message with a deterministic tiebreak on equal receivedAt.
+    // Used by the canonical financial-summary "debt" metric.
+    Optional<StatusMessage> findTopByOrderByReceivedAtDescIdDesc();
+
     // Latest 20, eager worksite for UI
     @EntityGraph(attributePaths = {"worksite"})
     List<StatusMessage> findTop20ByOrderByReceivedAtDesc();
