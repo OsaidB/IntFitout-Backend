@@ -28,7 +28,9 @@ public interface WorkAssignmentRepository extends JpaRepository<WorkAssignment, 
           tm.id as teamMemberId,
           tm.name as teamMemberName,
           tm.role as teamMemberRole,
-          tm.dailyWage as dailyWage
+          tm.dailyWage as dailyWage,
+          a.regularHoursOverride as regularHoursOverride,
+          a.overtimeHoursOverride as overtimeHoursOverride
         from WorkAssignment a
           join a.teamMember tm
         where a.masterWorksite.id = :masterId

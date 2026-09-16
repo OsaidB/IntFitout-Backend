@@ -1,6 +1,10 @@
 package life.work.IntFit.backend.service.impl;
 
+import life.work.IntFit.backend.dto.daily_assignments.AllocationErrorDTO;
+import life.work.IntFit.backend.dto.daily_assignments.DailyAssignmentsViewDTO;
+import life.work.IntFit.backend.dto.daily_assignments.DailyOvertimeDTO;
 import life.work.IntFit.backend.dto.daily_assignments.DailyWorkAssignmentDTO;
+import life.work.IntFit.backend.exception.error.AllocationValidationException;
 import life.work.IntFit.backend.dto.daily_assignments.OvertimeDTO;
 import life.work.IntFit.backend.dto.daily_assignments.SimpleAssignmentDTO;
 import life.work.IntFit.backend.dto.daily_assignments.WorkAssignmentDTO;
@@ -14,10 +18,13 @@ import life.work.IntFit.backend.repository.TeamMemberRepository;
 import life.work.IntFit.backend.repository.WorkAssignmentOvertimeRepository;
 import life.work.IntFit.backend.repository.WorkAssignmentRepository;
 import life.work.IntFit.backend.service.WorkAssignmentService;
+import life.work.IntFit.backend.service.allocation.AllocationPlanner;
+import life.work.IntFit.backend.service.allocation.DecimalHours;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -35,9 +42,34 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
     @Override
     @Transactional(readOnly = true)
     public List<WorkAssignmentDTO> getAssignmentsByDate(LocalDate date) {
-        // Load all assignments for that date
-        List<WorkAssignment> rows = workAssignmentRepo.findByDate(date);
+        return toRows(workAssignmentRepo.findByDate(date), overtimeRepo.findAllByDate(date));
+    }
 
+    @Override
+    @Transactional(readOnly = true)
+    public DailyAssignmentsViewDTO getDay(LocalDate date) {
+        List<WorkAssignment> rows = workAssignmentRepo.findByDate(date);
+        List<WorkAssignmentOvertime> overtimeRows = overtimeRepo.findAllByDate(date);
+
+        Set<Long> assigned = rows.stream().map(r -> r.getTeamMember().getId()).collect(Collectors.toSet());
+        List<DailyOvertimeDTO> overtime = overtimeRows.stream()
+                .sorted(Comparator.comparing(o -> o.getTeamMember().getId()))
+                .map(o -> {
+                    Double hours = o.getOvertimeHours();
+                    return new DailyOvertimeDTO(
+                            o.getTeamMember().getId(),
+                            o.getTeamMember().getName(),
+                            hours,
+                            hours == null || !Double.isFinite(hours)
+                                    ? null
+                                    : DecimalHours.toPlainString(DecimalHours.canonical(hours)),
+                            assigned.contains(o.getTeamMember().getId()));
+                })
+                .toList();
+        return new DailyAssignmentsViewDTO(date, toRows(rows, overtimeRows), overtime);
+    }
+
+    private List<WorkAssignmentDTO> toRows(List<WorkAssignment> rows, List<WorkAssignmentOvertime> overtimeRows) {
         // site counts per member for that date
         Map<Long, Integer> siteCounts = rows.stream()
                 .collect(Collectors.groupingBy(
@@ -46,7 +78,7 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
                 ));
 
         // overtime per member for that date (Double)
-        Map<Long, Double> overtimeByMember = overtimeRepo.findAllByDate(date).stream()
+        Map<Long, Double> overtimeByMember = overtimeRows.stream()
                 .collect(Collectors.toMap(
                         o -> o.getTeamMember().getId(),
                         WorkAssignmentOvertime::getOvertimeHours
@@ -63,20 +95,36 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
         return dtos;
     }
 
+    /**
+     * Replaces the day's assignments, overtime and allocations in one transaction.
+     *
+     * <p>Everything that can be rejected (unknown ids, allocation rules) is
+     * checked before the first write. Writes then run in this single
+     * transaction; the repository methods used here either have no
+     * transaction of their own or use the default REQUIRED propagation, so a
+     * failure at any step rolls back the assignment replacement, overtime
+     * changes and allocation values together.
+     */
     @Override
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void saveAssignmentsForDate(DailyWorkAssignmentDTO dto) {
         final LocalDate date = Objects.requireNonNull(dto.getDate(), "date is required");
+        if (dto.isAllocationsRepeated()) {
+            throw new AllocationValidationException(List.of(new AllocationErrorDTO(
+                    null, null, null, "DUPLICATE_FIELD",
+                    "\"allocations\" appears more than once in the request; send it once.")));
+        }
 
-        // --- 1) Replace assignments for the date (delete then insert, dedup by member+site)
-        workAssignmentRepo.deleteByDate(date);
-
+        // --- 1) Resolve the submitted assignments (dedup by member+site) without writing
         List<SimpleAssignmentDTO> incoming = (dto.getAssignments() == null)
                 ? Collections.emptyList()
                 : dto.getAssignments();
 
         Set<String> uniqPairs = new HashSet<>(incoming.size() * 2);
         List<WorkAssignment> toSave = new ArrayList<>();
+        Map<Long, Set<Long>> newSitesByMember = new HashMap<>();
+        Map<Long, String> memberNames = new HashMap<>();
+        Map<Long, String> worksiteNames = new HashMap<>();
 
         for (SimpleAssignmentDTO a : incoming) {
             if (a == null || a.getTeamMemberId() == null || a.getMasterWorksiteId() == null) continue;
@@ -96,42 +144,68 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
                     .masterWorksite(master)
                     .date(date)
                     .build());
+            newSitesByMember.computeIfAbsent(tmId, k -> new HashSet<>()).add(msId);
+            memberNames.put(tmId, member.getName());
+            worksiteNames.put(msId, master.getApprovedName());
         }
 
-        if (!toSave.isEmpty()) {
-            workAssignmentRepo.saveAll(toSave);
-        }
-
-        // --- 2) OVERTIME: idempotent + concurrency-safe (NO deleteAllByDate)
+        // --- 2) Resolve submitted overtime: last-write-wins per member, negatives clamped to 0
         List<OvertimeDTO> overtimeList = (dto.getOvertime() == null)
                 ? Collections.emptyList()
                 : dto.getOvertime();
 
-        // Collapse duplicates in the incoming payload (last-write-wins per member)
-        Map<Long, Double> lastPerMember = new LinkedHashMap<>();
+        Map<Long, BigDecimal> lastPerMember = new LinkedHashMap<>();
         for (OvertimeDTO ot : overtimeList) {
             if (ot == null || ot.getTeamMemberId() == null) continue;
-            Double hours = Optional.ofNullable(ot.getOvertimeHours()).orElse(0d);
+            lastPerMember.put(ot.getTeamMemberId(), ot.getOvertimeHours());
+        }
+        // Positivity is decided on the stored double, exactly as before; the exact text is kept for allocation checks.
+        Map<Long, Double> storedHours = new LinkedHashMap<>();
+        Map<Long, BigDecimal> positiveOvertime = new HashMap<>();
+        lastPerMember.forEach((mid, exact) -> {
+            double hours = exact == null ? 0d : DecimalHours.toDouble(exact);
             if (hours < 0d) hours = 0d;
-            lastPerMember.put(ot.getTeamMemberId(), hours);
+            storedHours.put(mid, hours);
+            if (hours > 0d) positiveOvertime.put(mid, exact);
+        });
+
+        // --- 3) Merge allocations with what is stored and validate the result (throws before any write)
+        List<WorkAssignment> existingRows = workAssignmentRepo.findByDate(date);
+        for (WorkAssignment row : existingRows) {
+            memberNames.putIfAbsent(row.getTeamMember().getId(), row.getTeamMember().getName());
+            worksiteNames.putIfAbsent(row.getMasterWorksite().getId(), row.getMasterWorksite().getApprovedName());
+        }
+        AllocationPlanner.Plan plan = AllocationPlanner.plan(new AllocationPlanner.Input(
+                newSitesByMember,
+                positiveOvertime,
+                existingRows,
+                dto.getAllocations(),
+                memberNames,
+                worksiteNames));
+
+        // --- 4) Replace assignments for the date, carrying the planned allocation values
+        workAssignmentRepo.deleteByDate(date);
+        for (WorkAssignment row : toSave) {
+            Long memberId = row.getTeamMember().getId();
+            Long worksiteId = row.getMasterWorksite().getId();
+            row.setRegularHoursOverride(plan.regularFor(memberId, worksiteId));
+            row.setOvertimeHoursOverride(plan.overtimeFor(memberId, worksiteId));
+        }
+        if (!toSave.isEmpty()) {
+            workAssignmentRepo.saveAll(toSave);
         }
 
-        // Members that should have a positive OT row after this save
-        Set<Long> keepPositive = lastPerMember.entrySet().stream()
-                .filter(e -> e.getValue() > 0d)
-                .map(Map.Entry::getKey)
-                .collect(Collectors.toSet());
-
+        // --- 5) OVERTIME: idempotent (NO deleteAllByDate); unchanged semantics
         // Delete rows that exist for this date but are now absent (or zeroed) in the payload
         for (WorkAssignmentOvertime existing : overtimeRepo.findAllByDate(date)) {
             Long mid = existing.getTeamMember().getId();
-            if (!keepPositive.contains(mid)) {
+            if (!positiveOvertime.containsKey(mid)) {
                 overtimeRepo.deleteByMemberAndDate(mid, date);
             }
         }
 
         // Upsert positive hours; delete explicit zeros
-        for (Map.Entry<Long, Double> e : lastPerMember.entrySet()) {
+        for (Map.Entry<Long, Double> e : storedHours.entrySet()) {
             Long mid = e.getKey();
             Double hours = e.getValue();
             if (hours <= 0d) {

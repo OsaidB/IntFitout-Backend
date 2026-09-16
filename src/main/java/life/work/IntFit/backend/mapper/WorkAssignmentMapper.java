@@ -3,7 +3,12 @@ package life.work.IntFit.backend.mapper;
 
 import life.work.IntFit.backend.dto.daily_assignments.WorkAssignmentDTO;
 import life.work.IntFit.backend.model.entity.WorkAssignment;
+import life.work.IntFit.backend.model.enums.AllocationMode;
+import life.work.IntFit.backend.service.allocation.DecimalHours;
+import life.work.IntFit.backend.service.allocation.HourAllocation;
 import org.springframework.stereotype.Component;
+
+import java.math.BigDecimal;
 
 @Component
 public class WorkAssignmentMapper {
@@ -20,25 +25,51 @@ public class WorkAssignmentMapper {
         dto.setMasterWorksiteName(assignment.getMasterWorksite().getApprovedName());
         dto.setDate(assignment.getDate());
         dto.setTeamMemberDailyWage(assignment.getTeamMember().getDailyWage());
-        // overtimeHours / allocatedHours intentionally left null in this variant
+        dto.setRegularAllocationMode(AllocationMode.of(assignment.getRegularHoursOverride()));
+        dto.setOvertimeAllocationMode(AllocationMode.of(assignment.getOvertimeHoursOverride()));
+        dto.setRegularHoursOverride(DecimalHours.toPlainString(assignment.getRegularHoursOverride()));
+        dto.setOvertimeHoursOverride(DecimalHours.toPlainString(assignment.getOvertimeHoursOverride()));
+        // overtimeHours / allocatedHours / resolved hours intentionally left null in this variant
         return dto;
     }
 
     /**
      * Enriched mapping that includes:
      * - overtimeHours: per-member overtime for that date (may be null)
-     * - allocatedHours: (8 + overtimeHours) / siteCountForMember (null if siteCountForMember == null/0)
+     * - allocatedHours: resolved hours for this row rounded to 2 decimals (null if siteCountForMember == null/0)
+     * - resolved*Hours: the same hours unrounded, per category and combined
      */
     public WorkAssignmentDTO toDTO(WorkAssignment assignment, Double overtimeHours, Integer siteCountForMember) {
         WorkAssignmentDTO dto = toDTO(assignment);
 
         // Keep null if not provided (caller may use null to indicate "not loaded")
         dto.setOvertimeHours(overtimeHours);
+        dto.setOvertimeHoursDecimal(overtimeHours == null || !Double.isFinite(overtimeHours)
+                ? null
+                : DecimalHours.toPlainString(DecimalHours.canonical(overtimeHours)));
+        dto.setSiteCount(siteCountForMember);
 
         if (siteCountForMember != null && siteCountForMember > 0) {
             double otForSplit = (overtimeHours != null && overtimeHours > 0d) ? overtimeHours : 0d;
-            double allocated = (BASE_DAY_HOURS + otForSplit) / siteCountForMember;
-            dto.setAllocatedHours(round2(allocated));
+            BigDecimal regularOverride = assignment.getRegularHoursOverride();
+            BigDecimal overtimeOverride = assignment.getOvertimeHoursOverride();
+
+            double total;
+            if (HourAllocation.isAuto(regularOverride, overtimeOverride)) {
+                total = (BASE_DAY_HOURS + otForSplit) / siteCountForMember;
+            } else {
+                total = HourAllocation.quotient(
+                        HourAllocation.effectiveNumerator(regularOverride, overtimeOverride, otForSplit, siteCountForMember),
+                        siteCountForMember);
+            }
+            dto.setResolvedRegularHours(regularOverride != null
+                    ? regularOverride.doubleValue()
+                    : BASE_DAY_HOURS / siteCountForMember);
+            dto.setResolvedOvertimeHours(overtimeOverride != null
+                    ? overtimeOverride.doubleValue()
+                    : otForSplit / siteCountForMember);
+            dto.setResolvedTotalHours(total);
+            dto.setAllocatedHours(round2(total));
         } else {
             dto.setAllocatedHours(null);
         }

@@ -1,5 +1,6 @@
 package life.work.IntFit.backend.controller;
 
+import life.work.IntFit.backend.dto.daily_assignments.DailyAssignmentsViewDTO;
 import life.work.IntFit.backend.dto.daily_assignments.DailyWorkAssignmentDTO;
 import life.work.IntFit.backend.dto.daily_assignments.WorkAssignmentDTO;
 import life.work.IntFit.backend.service.WorkAssignmentService;
@@ -34,7 +35,21 @@ public class WorkAssignmentController {
     }
 
     /**
-     * Replaces assignments (and overtime) for the given date.
+     * The whole day as POST replaces it: the by-date rows plus every overtime
+     * total, including workers with no assignment. Use this for read-modify-write.
+     */
+    @GetMapping("/day")
+    public ResponseEntity<DailyAssignmentsViewDTO> getDay(
+            @RequestParam("date") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
+    ) {
+        return ResponseEntity.ok(workAssignmentService.getDay(date));
+    }
+
+    /**
+     * Replaces assignments, overtime and hour allocations for the given date.
+     * Returns 422 with per-member errors, and saves nothing, when the resulting
+     * allocations would be invalid. Optional "allocations" are documented on
+     * {@link DailyWorkAssignmentDTO}.
      * Expects payload:
      * {
      *   "date": "2025-08-15",

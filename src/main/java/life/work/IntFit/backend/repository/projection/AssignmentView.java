@@ -10,4 +10,6 @@ public interface AssignmentView {
     String getTeamMemberName();
     String getTeamMemberRole();   // ✅ add
     Double getDailyWage();
+    BigDecimal getRegularHoursOverride();
+    BigDecimal getOvertimeHoursOverride();
 }

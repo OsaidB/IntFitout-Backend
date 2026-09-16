@@ -12,6 +12,7 @@ import life.work.IntFit.backend.repository.projection.AssignmentView;
 import life.work.IntFit.backend.repository.projection.InvoiceCategoryTotalView;
 import life.work.IntFit.backend.repository.projection.InvoiceSumView;
 import life.work.IntFit.backend.repository.projection.SiteCountView;
+import life.work.IntFit.backend.service.allocation.HourAllocation;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -79,18 +80,28 @@ public class WorksiteCostServiceImpl implements WorksiteCostService {
             double ot = overtimeMap.getOrDefault(key(d, tmId), 0d);
             if (ot < 0d) ot = 0d;
 
-            // allocatedHours = (8 + ot) / siteCount
-            BigDecimal allocatedHours = BigDecimal.valueOf(8d + ot)
-                    .divide(BigDecimal.valueOf(siteCount), 8, RoundingMode.HALF_UP);
-
-            // dayPay = dailyWage * (8 + ot) / 8
             BigDecimal dailyWage = bd(r.getDailyWage());
-            BigDecimal dayPay = dailyWage.multiply(
-                    BigDecimal.valueOf(8d + ot).divide(EIGHT, 8, RoundingMode.HALF_UP)
-            );
+            BigDecimal allocatedHours;
+            BigDecimal sharePay;
+            if (HourAllocation.isAuto(r.getRegularHoursOverride(), r.getOvertimeHoursOverride())) {
+                // allocatedHours = (8 + ot) / siteCount
+                allocatedHours = BigDecimal.valueOf(8d + ot)
+                        .divide(BigDecimal.valueOf(siteCount), 8, RoundingMode.HALF_UP);
 
-            // sharePay = dayPay / siteCount
-            BigDecimal sharePay = dayPay.divide(BigDecimal.valueOf(siteCount), 8, RoundingMode.HALF_UP);
+                // dayPay = dailyWage * (8 + ot) / 8
+                BigDecimal dayPay = dailyWage.multiply(
+                        BigDecimal.valueOf(8d + ot).divide(EIGHT, 8, RoundingMode.HALF_UP)
+                );
+
+                // sharePay = dayPay / siteCount
+                sharePay = dayPay.divide(BigDecimal.valueOf(siteCount), 8, RoundingMode.HALF_UP);
+            } else {
+                // same scale-8 intermediates as above, each from a single division of the exact amount
+                BigDecimal numerator = HourAllocation.effectiveNumerator(
+                        r.getRegularHoursOverride(), r.getOvertimeHoursOverride(), ot, siteCount);
+                allocatedHours = numerator.divide(BigDecimal.valueOf(siteCount), 8, RoundingMode.HALF_UP);
+                sharePay = HourAllocation.siteCost(dailyWage, numerator, siteCount, 8);
+            }
 
             totalHours = totalHours.add(allocatedHours);
             totalWages = totalWages.add(sharePay);

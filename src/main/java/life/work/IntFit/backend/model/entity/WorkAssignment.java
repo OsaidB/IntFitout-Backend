@@ -1,8 +1,10 @@
 package life.work.IntFit.backend.model.entity;
 
 import jakarta.persistence.*;
+import life.work.IntFit.backend.service.allocation.DecimalHours;
 import lombok.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 
 @Entity
@@ -31,5 +33,19 @@ public class WorkAssignment {
 
     @Column(nullable = false)
     private LocalDate date;
+
+    /**
+     * Custom regular hours for this worksite. Null means the member's regular
+     * hours are split equally (AUTO). Within one member's day either every
+     * row carries a value or none does.
+     */
+    @Column(name = "regular_hours_override",
+            precision = DecimalHours.STORAGE_PRECISION, scale = DecimalHours.STORAGE_SCALE)
+    private BigDecimal regularHoursOverride;
+
+    /** Custom overtime hours for this worksite; same rules as {@link #regularHoursOverride}. */
+    @Column(name = "overtime_hours_override",
+            precision = DecimalHours.STORAGE_PRECISION, scale = DecimalHours.STORAGE_SCALE)
+    private BigDecimal overtimeHoursOverride;
 }
 

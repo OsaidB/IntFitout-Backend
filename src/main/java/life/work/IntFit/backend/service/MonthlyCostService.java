@@ -100,9 +100,13 @@ public class MonthlyCostService {
         return map;
     }
 
-    @SuppressWarnings("unchecked")
-    private Map<Long, BigDecimal> loadLaborSums(LocalDate from, LocalDate to) {
-        String sql = """
+    /**
+     * Labor cost per master worksite. Rows without custom allocations keep the
+     * original expression; otherwise each category uses its custom hours or its
+     * equal share. Shares stay in DOUBLE arithmetic (daily_wage is DOUBLE) because
+     * Connector/J sends :stdHours as a DECIMAL literal. Must match HourAllocation.
+     */
+    static final String LABOR_SUMS_SQL = """
         WITH day_counts AS (
           SELECT wa.date, wa.team_member_id, COUNT(*) AS site_count
           FROM work_assignments wa
@@ -112,11 +116,22 @@ public class MonthlyCostService {
         member_day_cost AS (
           SELECT
             wa.master_worksite_id AS mw_id,
-            /* daily wage + OT hours * hourly base * multiplier */
-            ( tm.daily_wage
-              + COALESCE(ot.overtime_hours, 0) * (tm.daily_wage / :stdHours) * :otMultiplier
-            ) AS day_cost,
-            dc.site_count
+            CASE
+              WHEN wa.regular_hours_override IS NULL AND wa.overtime_hours_override IS NULL THEN
+                /* equal split, unchanged: (daily wage + OT hours * hourly base * multiplier) / site count */
+                ( tm.daily_wage
+                  + COALESCE(ot.overtime_hours, 0) * (tm.daily_wage / :stdHours) * :otMultiplier
+                ) / NULLIF(dc.site_count, 0)
+              ELSE
+                CASE
+                  WHEN wa.regular_hours_override IS NULL
+                    THEN tm.daily_wage / NULLIF(dc.site_count, 0)
+                  ELSE (tm.daily_wage / :stdHours) * wa.regular_hours_override
+                END
+                + (tm.daily_wage / :stdHours)
+                  * COALESCE(wa.overtime_hours_override, COALESCE(ot.overtime_hours, 0) / NULLIF(dc.site_count, 0))
+                  * :otMultiplier
+            END AS site_cost
           FROM work_assignments wa
           JOIN team_members tm
             ON tm.id = wa.team_member_id
@@ -128,13 +143,15 @@ public class MonthlyCostService {
            AND dc.team_member_id = wa.team_member_id
           WHERE wa.date >= :from AND wa.date < :to
         )
-        SELECT mw_id, ROUND(SUM(day_cost / NULLIF(site_count,0)), 2) AS sum_labor
+        SELECT mw_id, ROUND(SUM(site_cost), 2) AS sum_labor
         FROM member_day_cost
         WHERE mw_id IS NOT NULL
         GROUP BY mw_id
     """;
 
-        List<Object[]> rows = em.createNativeQuery(sql)
+    @SuppressWarnings("unchecked")
+    private Map<Long, BigDecimal> loadLaborSums(LocalDate from, LocalDate to) {
+        List<Object[]> rows = em.createNativeQuery(LABOR_SUMS_SQL)
                 .setParameter("from", from)
                 .setParameter("to",   to)
                 .setParameter("stdHours", 8.0)     // ← change if your standard day ≠ 8h

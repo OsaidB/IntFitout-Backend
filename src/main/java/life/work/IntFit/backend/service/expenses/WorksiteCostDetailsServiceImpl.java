@@ -8,6 +8,7 @@ import life.work.IntFit.backend.model.entity.MasterWorksite;
 import life.work.IntFit.backend.repository.*;
 import life.work.IntFit.backend.repository.projection.AssignmentView;
 import life.work.IntFit.backend.repository.projection.MemberDayCountView;
+import life.work.IntFit.backend.service.allocation.HourAllocation;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -102,18 +103,29 @@ public class WorksiteCostDetailsServiceImpl implements WorksiteCostDetailsServic
             long siteCount = siteCountMap.getOrDefault(new Key(d, memberId), 1L);
             double overtime = overtimeMap.getOrDefault(new Key(d, memberId), 0.0);
 
-            double effectiveHours = 8.0 + Math.max(0.0, overtime);
-            double allocatedHoursDouble = effectiveHours / (double) siteCount;
-
-            BigDecimal allocatedHours = BigDecimal.valueOf(allocatedHoursDouble);
-
-            // Cost model:
-            // hourlyRate = dailyWage / 8
-            // cost = hourlyRate * allocatedHours
             BigDecimal dailyWage = bd(a.getDailyWage() == null ? null : a.getDailyWage().doubleValue());
-            BigDecimal cost = dailyWage
-                    .multiply(allocatedHours)
-                    .divide(BigDecimal.valueOf(8), 4, RoundingMode.HALF_UP);
+            BigDecimal allocatedHours;
+            BigDecimal cost;
+            if (HourAllocation.isAuto(a.getRegularHoursOverride(), a.getOvertimeHoursOverride())) {
+                double effectiveHours = 8.0 + Math.max(0.0, overtime);
+                double allocatedHoursDouble = effectiveHours / (double) siteCount;
+
+                allocatedHours = BigDecimal.valueOf(allocatedHoursDouble);
+
+                // Cost model:
+                // hourlyRate = dailyWage / 8
+                // cost = hourlyRate * allocatedHours
+                cost = dailyWage
+                        .multiply(allocatedHours)
+                        .divide(BigDecimal.valueOf(8), 4, RoundingMode.HALF_UP);
+            } else {
+                // Same 4-decimal cost, rounded once from the exact amount
+                BigDecimal numerator = HourAllocation.effectiveNumerator(
+                        a.getRegularHoursOverride(), a.getOvertimeHoursOverride(),
+                        Math.max(0.0, overtime), siteCount);
+                allocatedHours = HourAllocation.hours(numerator, siteCount);
+                cost = HourAllocation.siteCost(dailyWage, numerator, siteCount, 4);
+            }
 
             DayAcc bucket = dayAcc.get(d);
             if (bucket != null) {
