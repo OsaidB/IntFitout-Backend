@@ -1,6 +1,7 @@
 package life.work.IntFit.backend.service.impl;
 
 import life.work.IntFit.backend.dto.daily_assignments.AllocationErrorDTO;
+import life.work.IntFit.backend.dto.daily_assignments.AssignmentHistoryDTO;
 import life.work.IntFit.backend.dto.daily_assignments.DailyAssignmentsViewDTO;
 import life.work.IntFit.backend.dto.daily_assignments.DailyOvertimeDTO;
 import life.work.IntFit.backend.dto.daily_assignments.DailyWorkAssignmentDTO;
@@ -17,6 +18,7 @@ import life.work.IntFit.backend.repository.MasterWorksiteRepository;
 import life.work.IntFit.backend.repository.TeamMemberRepository;
 import life.work.IntFit.backend.repository.WorkAssignmentOvertimeRepository;
 import life.work.IntFit.backend.repository.WorkAssignmentRepository;
+import life.work.IntFit.backend.repository.projection.SiteCountView;
 import life.work.IntFit.backend.service.WorkAssignmentService;
 import life.work.IntFit.backend.service.allocation.AllocationPlanner;
 import life.work.IntFit.backend.service.allocation.DecimalHours;
@@ -67,6 +69,33 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
                 })
                 .toList();
         return new DailyAssignmentsViewDTO(date, toRows(rows, overtimeRows), overtime);
+    }
+
+    /**
+     * Sparse daily distinct-worker counts for the range, plus the history floor.
+     *
+     * siteCountsByRange groups by (date, member), so it already emits exactly
+     * one row per worker per date regardless of how many worksites that worker
+     * was on. Counting those rows per date therefore gives distinct workers
+     * without a second query, and overtime-only records are excluded because
+     * they live in a different table.
+     *
+     * Dates with no assignment are simply absent; the caller fills the calendar.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public AssignmentHistoryDTO getHistory(LocalDate from, LocalDate to) {
+        Map<LocalDate, Integer> workersByDate = new TreeMap<>();
+        for (SiteCountView row : workAssignmentRepo.siteCountsByRange(from, to)) {
+            workersByDate.merge(row.getDate(), 1, Integer::sum);
+        }
+
+        List<AssignmentHistoryDTO.DayCount> days = workersByDate.entrySet().stream()
+                .map(e -> new AssignmentHistoryDTO.DayCount(e.getKey(), e.getValue()))
+                .toList();
+
+        return new AssignmentHistoryDTO(
+                from, to, workAssignmentRepo.findEarliestAssignmentDate(), days);
     }
 
     private List<WorkAssignmentDTO> toRows(List<WorkAssignment> rows, List<WorkAssignmentOvertime> overtimeRows) {

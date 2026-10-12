@@ -1,6 +1,7 @@
 // --- SERVICE ---
 package life.work.IntFit.backend.service;
 
+import life.work.IntFit.backend.dto.daily_assignments.AssignmentHistoryDTO;
 import life.work.IntFit.backend.dto.daily_assignments.DailyAssignmentsViewDTO;
 import life.work.IntFit.backend.dto.daily_assignments.DailyWorkAssignmentDTO;
 import life.work.IntFit.backend.dto.daily_assignments.WorkAssignmentDTO;
@@ -12,4 +13,10 @@ public interface WorkAssignmentService {
     List<WorkAssignmentDTO> getAssignmentsByDate(LocalDate date);
     DailyAssignmentsViewDTO getDay(LocalDate date);
     void saveAssignmentsForDate(DailyWorkAssignmentDTO dto);
+
+    /**
+     * Sparse daily distinct-worker counts for an inclusive calendar range, plus
+     * the earliest assignment date in the database.
+     */
+    AssignmentHistoryDTO getHistory(LocalDate from, LocalDate to);
 }

@@ -72,4 +72,12 @@ public interface WorkAssignmentRepository extends JpaRepository<WorkAssignment, 
             @Param("end") LocalDate end
     );
 
+    /**
+     * Earliest assignment date in the whole table, or null when no assignment
+     * exists. This is the history floor: callers stop paging backwards once
+     * they have covered it.
+     */
+    @Query("select min(a.date) from WorkAssignment a")
+    LocalDate findEarliestAssignmentDate();
+
 }

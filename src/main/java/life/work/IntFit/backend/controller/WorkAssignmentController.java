@@ -1,5 +1,6 @@
 package life.work.IntFit.backend.controller;
 
+import life.work.IntFit.backend.dto.daily_assignments.AssignmentHistoryDTO;
 import life.work.IntFit.backend.dto.daily_assignments.DailyAssignmentsViewDTO;
 import life.work.IntFit.backend.dto.daily_assignments.DailyWorkAssignmentDTO;
 import life.work.IntFit.backend.dto.daily_assignments.WorkAssignmentDTO;
@@ -10,6 +11,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 @RestController
@@ -19,6 +21,13 @@ import java.util.List;
 public class WorkAssignmentController {
 
     private final WorkAssignmentService workAssignmentService;
+
+    /**
+     * Longest range one history request may cover. The history screen asks for
+     * one calendar month at a time; 92 days leaves room for a quarter without
+     * letting a caller pull the whole table in one request.
+     */
+    static final long MAX_HISTORY_RANGE_DAYS = 92;
 
     /**
      * Returns all (member ↔ worksite) assignments for a date.
@@ -43,6 +52,31 @@ public class WorkAssignmentController {
             @RequestParam("date") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
     ) {
         return ResponseEntity.ok(workAssignmentService.getDay(date));
+    }
+
+    /**
+     * Daily distinct-worker counts for an inclusive calendar range, plus the
+     * earliest assignment date in the database.
+     *
+     * Only dates that have at least one regular assignment are returned; the
+     * caller generates the missing calendar days, which keeps the working-week
+     * rule in the client. A worker on several worksites in one day counts once.
+     *
+     * Returns 400 when a bound is missing, the range is inverted, or it spans
+     * more than {@link #MAX_HISTORY_RANGE_DAYS} days.
+     */
+    @GetMapping("/history")
+    public ResponseEntity<AssignmentHistoryDTO> getHistory(
+            @RequestParam("from") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam("to") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to
+    ) {
+        if (from == null || to == null || to.isBefore(from)) {
+            return ResponseEntity.badRequest().build();
+        }
+        if (ChronoUnit.DAYS.between(from, to) >= MAX_HISTORY_RANGE_DAYS) {
+            return ResponseEntity.badRequest().build();
+        }
+        return ResponseEntity.ok(workAssignmentService.getHistory(from, to));
     }
 
     /**
