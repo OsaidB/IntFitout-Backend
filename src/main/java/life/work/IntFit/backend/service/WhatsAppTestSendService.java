@@ -28,7 +28,7 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 
-/** Manual connectivity test only. Never sends on construction, startup or a schedule. */
+/** Test-only hello-world sender shared by the protected manual endpoint and the one-time scheduler. */
 @Service
 public class WhatsAppTestSendService {
 
@@ -60,12 +60,8 @@ public class WhatsAppTestSendService {
     }
 
     public SendResult send(String suppliedSecret, boolean hasRequestOverrides) {
-        if (!settings.enabled) {
-            return failure(HttpStatus.SERVICE_UNAVAILABLE, "unavailable", "WhatsApp test sending is disabled.");
-        }
-        if (!settings.valid()) {
-            return failure(HttpStatus.SERVICE_UNAVAILABLE, "unavailable", "WhatsApp test sending has missing or invalid configuration.");
-        }
+        SendResult unavailable = unavailableReason();
+        if (unavailable != null) return unavailable;
         if (suppliedSecret == null || !MessageDigest.isEqual(settings.sendSecret.getBytes(StandardCharsets.UTF_8),
                 suppliedSecret.getBytes(StandardCharsets.UTF_8))) {
             return failure(HttpStatus.FORBIDDEN, "unauthorized", "Unauthorized test-send request.");
@@ -73,7 +69,30 @@ public class WhatsAppTestSendService {
         if (hasRequestOverrides) {
             return failure(HttpStatus.BAD_REQUEST, "invalid_request", "This endpoint accepts no query parameters or request body.");
         }
+        return sendTemplate();
+    }
 
+    boolean readyForScheduledTest() {
+        return settings.enabled && settings.valid();
+    }
+
+    // Internal invocation only; HTTP callers must still pass the manual endpoint's dedicated secret.
+    SendResult sendScheduledTest() {
+        SendResult unavailable = unavailableReason();
+        return unavailable != null ? unavailable : sendTemplate();
+    }
+
+    private SendResult unavailableReason() {
+        if (!settings.enabled) {
+            return failure(HttpStatus.SERVICE_UNAVAILABLE, "unavailable", "WhatsApp test sending is disabled.");
+        }
+        if (!settings.valid()) {
+            return failure(HttpStatus.SERVICE_UNAVAILABLE, "unavailable", "WhatsApp test sending has missing or invalid configuration.");
+        }
+        return null;
+    }
+
+    private SendResult sendTemplate() {
         Map<String, Object> payload = Map.of(
                 "messaging_product", "whatsapp",
                 "to", settings.recipient,

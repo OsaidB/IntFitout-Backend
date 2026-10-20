@@ -116,6 +116,16 @@ class WhatsAppTestSendServiceTest {
         assertThat(client.requests).isEmpty();
     }
 
+    @Test
+    void internalScheduledInvocationUsesSharedSenderAndManualSecretProtectionRemains() throws Exception {
+        assertThat(service.readyForScheduledTest()).isTrue();
+        respond(200, ACCEPTED_RESPONSE);
+        assertThat(service.sendScheduledTest().outgoingMessageId()).isEqualTo(MESSAGE_ID);
+        mvc.perform(post(ENDPOINT)).andExpect(status().isForbidden());
+        assertThat(capturedRequest().getUri().toString())
+                .isEqualTo("https://graph.facebook.com/v25.0/" + PHONE_ID + "/messages");
+    }
+
     @ParameterizedTest
     @NullAndEmptySource
     @ValueSource(strings = {"false", "0", "yes", " true "})
@@ -124,6 +134,8 @@ class WhatsAppTestSendServiceTest {
         rebuild();
         mvc.perform(authorizedPost()).andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.status").value("unavailable"));
+        assertThat(service.readyForScheduledTest()).isFalse();
+        assertThat(service.sendScheduledTest().status()).isEqualTo("unavailable");
         assertThat(client.requests).isEmpty();
     }
 
@@ -152,6 +164,8 @@ class WhatsAppTestSendServiceTest {
         rebuild();
         mvc.perform(authorizedPost()).andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.outgoingMessageId").doesNotExist());
+        assertThat(service.readyForScheduledTest()).isFalse();
+        assertThat(service.sendScheduledTest().status()).isEqualTo("unavailable");
         assertThat(client.requests).isEmpty();
     }
 
