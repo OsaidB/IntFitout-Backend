@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Privacy notice | IntFitout</title>
+    <style>
+        :root { color-scheme: light; font-family: system-ui, sans-serif; color: #202d36; background: #f3f6f7; }
+        * { box-sizing: border-box; }
+        body { margin: 0; font-size: 1rem; line-height: 1.7; }
+        main { max-width: 50rem; margin: 2rem auto; padding: 2.5rem; background: #fff; border: 1px solid #dce4e7; border-radius: 1rem; }
+        header { border-bottom: 1px solid #dce4e7; padding-bottom: 1.5rem; }
+        .brand { margin: 0; color: #356356; font-weight: 700; letter-spacing: .04em; }
+        h1 { margin: .3rem 0; font-size: clamp(2rem, 5vw, 2.7rem); line-height: 1.2; color: #163f35; }
+        h2 { margin: 1.8rem 0 .5rem; font-size: 1.25rem; line-height: 1.4; }
+        p { margin: .7rem 0; }
+        .updated { color: #53636d; }
+        nav { margin-top: 1rem; }
+        a { color: #17624d; text-underline-offset: .2em; overflow-wrap: anywhere; }
+        a:hover { text-decoration-thickness: 2px; }
+        a:focus-visible { outline: 3px solid #926000; outline-offset: 4px; border-radius: 2px; }
+        ul { padding-left: 1.4rem; }
+        li + li { margin-top: .6rem; }
+        .planned { border-left: 4px solid #739487; padding-left: 1.2rem; }
+        @media (max-width: 40rem) { main { margin: 0; padding: 1.4rem; border: 0; border-radius: 0; } }
+    </style>
+</head>
+<body>
+<main>
+    <header>
+        <p class="brand">IntFitout</p>
+        <h1>Privacy notice</h1>
+        <p class="updated">Last updated: <time datetime="2026-10-20">20 October 2026</time></p>
+        <nav aria-label="Related information"><a href="/data-deletion">Data deletion instructions</a></nav>
+    </header>
+
+    <section aria-labelledby="about">
+        <h2 id="about">About IntFitout</h2>
+        <p>IntFitout is an internal application operated by AL-BABA Interiors to manage workers, worksites, daily assignments, payroll and financial records. The public contact for privacy requests is Osaid Jamal Baba.</p>
+    </section>
+
+    <section aria-labelledby="information">
+        <h2 id="information">Information processed</h2>
+        <p>Depending on the records entered and the functions used, IntFitout processes:</p>
+        <ul>
+            <li><strong>Worker and contact details:</strong> names, contact or phone details, work roles and experience.</li>
+            <li><strong>Work records:</strong> worksite assignments, dates, hours, overtime, work-session times, tasks and notes.</li>
+            <li><strong>Wage and payroll records:</strong> daily wages, wage-change history, payroll records, overtime pay, adjustments and related notes.</li>
+            <li><strong>Business contacts and worksites:</strong> contact names, phone numbers, business roles, worksite relationships, site locations and project notes.</li>
+            <li><strong>Financial documents and uploads:</strong> invoices, payments, check recipient and issuer details, amounts, dates, references, check serial numbers, uploaded check images and document links.</li>
+            <li><strong>Invoice and SMS processing records:</strong> invoice links and extracted information, SMS receipt times, status-message text and amounts, and processing-failure records that may contain message previews and error details.</li>
+        </ul>
+    </section>
+
+    <section aria-labelledby="purposes">
+        <h2 id="purposes">How information is used</h2>
+        <p>Information is used to operate the business, coordinate work, maintain work and payroll records, manage financial records, process invoices and communicate about work.</p>
+    </section>
+
+    <section aria-labelledby="providers">
+        <h2 id="providers">Service providers</h2>
+        <p>The IntFitout backend is hosted on Railway. Railway provides the hosting used to run the backend and process the information handled by it.</p>
+        <p>For invoice conversion, IntFitout sends invoice document links to an external invoice-processing service hosted on Render and receives extracted invoice information for review and storage. That service processes the linked documents as part of invoice conversion.</p>
+    </section>
+
+    <section class="planned" aria-labelledby="whatsapp">
+        <h2 id="whatsapp">Planned WhatsApp reporting</h2>
+        <p>A WhatsApp worker-reporting feature is planned. Its backend integration and rollout are not complete.</p>
+        <p>If introduced, the feature would use worker phone numbers to send daily questions about where they worked the previous day, including when assignments already exist. Workers would select one or more worksites and could optionally identify coworkers at each site. Workers would report worksites; the administrator would handle hours.</p>
+        <p>The feature would process phone numbers, worksite selections, optional coworker mentions and message identifiers to associate messages and reports with the relevant worker and work date. Meta/WhatsApp would provide the messaging service used to send and receive these messages.</p>
+        <p>Reports would await administrator review before creating or changing assignments. Coworker mentions would be supporting information only: they would not automatically create assignments or replace those coworkers' own reports.</p>
+    </section>
+
+    <section aria-labelledby="requests">
+        <h2 id="requests">Access, correction and deletion requests</h2>
+        <p>Contact Osaid Jamal Baba at <a href="mailto:office.albaba@gmail.com">office.albaba@gmail.com</a> to ask about access to, correction of or deletion of information relating to you.</p>
+        <p>Deletion requests are initially reviewed and handled manually by Osaid. He may ask for enough information to verify the request's connection to you and will communicate what can be removed and any records that need to remain. See the <a href="/data-deletion">data deletion instructions</a> for how to submit a request.</p>
+    </section>
+
+    <section aria-labelledby="retention">
+        <h2 id="retention">Retention and deletion limitations</h2>
+        <p>This notice does not specify fixed retention periods. A deletion request is reviewed against the information involved and any work, payroll or financial records that need to remain; sending a request does not automatically erase records.</p>
+        <p>Deleting a worker record does not by itself ensure removal of related assignments, payroll snapshots, uploads, logs, backups or copies held by service providers. The scope of removal and any remaining records must be considered separately during the manual review.</p>
+    </section>
+</main>
+</body>
+</html>
