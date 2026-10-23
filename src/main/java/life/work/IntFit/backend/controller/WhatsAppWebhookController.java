@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectReader;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import life.work.IntFit.backend.reporting.ReportingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,7 +30,7 @@ import java.util.HexFormat;
 import java.util.Set;
 import java.util.regex.Pattern;
 
-/** Connectivity prototype: authenticates and acknowledges events, without durable storage. */
+/** Authenticates bytes first; configured reporting events commit before HTTP acknowledgement. */
 @RestController
 public class WhatsAppWebhookController {
 
@@ -48,18 +49,24 @@ public class WhatsAppWebhookController {
     private final ObjectReader jsonReader;
     private final String verifyToken;
     private final String appSecret;
+    private final ReportingService reporting;
 
     @Autowired
-    public WhatsAppWebhookController(ObjectMapper objectMapper) {
-        this(objectMapper, System.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN"), System.getenv("WHATSAPP_APP_SECRET"));
+    public WhatsAppWebhookController(ObjectMapper objectMapper, ReportingService reporting) {
+        this(objectMapper, System.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN"), System.getenv("WHATSAPP_APP_SECRET"), reporting);
     }
 
     // Explicit values allow isolated tests; production configuration comes only from the environment.
     WhatsAppWebhookController(ObjectMapper objectMapper, String verifyToken, String appSecret) {
+        this(objectMapper,verifyToken,appSecret,null);
+    }
+
+    WhatsAppWebhookController(ObjectMapper objectMapper, String verifyToken, String appSecret, ReportingService reporting) {
         this.objectMapper = objectMapper;
         this.jsonReader = objectMapper.reader().with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
         this.verifyToken = verifyToken;
         this.appSecret = appSecret;
+        this.reporting = reporting;
     }
 
     @GetMapping(value = "/webhooks/whatsapp", produces = "text/plain;charset=UTF-8")
@@ -104,6 +111,13 @@ public class WhatsAppWebhookController {
                 for (JsonNode change : elements(entry.path("changes"))) {
                     if (!"messages".equals(change.path("field").asText())) continue;
                     JsonNode value = change.path("value");
+                    try {
+                        if (reporting != null) reporting.acceptVerifiedValue(value);
+                    } catch (RuntimeException ignored) {
+                        // No payload/exception logging. Already committed events are safe on batch redelivery.
+                        log.warn("whatsapp_reporting webhook_processing=unavailable acknowledgement=withheld");
+                        return text(HttpStatus.SERVICE_UNAVAILABLE, "Reporting processing unavailable; event acknowledgement withheld.");
+                    }
                     for (JsonNode message : elements(value.path("messages"))) {
                         if (message.isObject()) logMessage(message);
                     }

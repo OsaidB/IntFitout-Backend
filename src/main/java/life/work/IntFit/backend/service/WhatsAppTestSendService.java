@@ -6,16 +6,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectReader;
 import jakarta.annotation.PreDestroy;
 import org.apache.hc.client5.http.classic.methods.HttpPost;
-import org.apache.hc.client5.http.config.ConnectionConfig;
 import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
-import org.apache.hc.client5.http.impl.classic.HttpClients;
-import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
 import org.apache.hc.core5.http.ClassicHttpResponse;
 import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.HttpHeaders;
 import org.apache.hc.core5.http.io.entity.ByteArrayEntity;
-import org.apache.hc.core5.util.Timeout;
+import life.work.IntFit.backend.config.WhatsAppHttpTransport;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -32,14 +29,9 @@ import java.util.regex.Pattern;
 @Service
 public class WhatsAppTestSendService {
 
-    private static final Timeout CONNECTION_TIMEOUT = Timeout.ofSeconds(3);
-    private static final Timeout RESPONSE_TIMEOUT = Timeout.ofSeconds(10);
     private static final int MAX_RESPONSE_BYTES = 64 * 1024;
     private static final Pattern MESSAGE_ID = Pattern.compile("wamid\\.[A-Za-z0-9._:+/=-]{1,512}");
-    private static final RequestConfig REQUEST_CONFIG = RequestConfig.custom()
-            .setConnectionRequestTimeout(CONNECTION_TIMEOUT)
-            .setResponseTimeout(RESPONSE_TIMEOUT)
-            .build();
+    private static final RequestConfig REQUEST_CONFIG = WhatsAppHttpTransport.requestConfig();
 
     private final ObjectMapper objectMapper;
     private final ObjectReader jsonReader;
@@ -148,16 +140,7 @@ public class WhatsAppTestSendService {
     }
 
     private static CloseableHttpClient createClient() {
-        return HttpClients.custom()
-                .setConnectionManager(PoolingHttpClientConnectionManagerBuilder.create()
-                        .setDefaultConnectionConfig(ConnectionConfig.custom()
-                                .setConnectTimeout(CONNECTION_TIMEOUT)
-                                .setSocketTimeout(RESPONSE_TIMEOUT)
-                                .build())
-                        .build())
-                .disableAutomaticRetries()
-                .disableRedirectHandling()
-                .build();
+        return WhatsAppHttpTransport.create();
     }
 
     @PreDestroy
