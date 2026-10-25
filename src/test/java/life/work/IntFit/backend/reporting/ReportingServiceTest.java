@@ -178,11 +178,11 @@ class ReportingServiceTest extends ReportingTestSupport {
         setup();id=initiate().id();act(id,"start",0);clock.now=clock.now.plus(Duration.ofHours(24));dispatch(id);assertEquals("CANCELLED",current(id).state());assertEquals(1,sends.get());
     }
     @Test void revokedEligibilityOrChangedNumberBlocksAlreadyPendingSend() {
-        String id=initiate().id();service.configureWorker(7,false,"970599000007");assertThrows(ReportingProblem.class,() -> dispatch(id));assertEquals(0,sends.get());
+        String id=initiate().id();service.configureWorker(7,false,"970599000007");dispatch(id);assertEquals("WORKER_SETUP_CHANGED",current(id).failureCode());assertEquals(0,sends.get());
     }
     @Test void batchedStatusEventsCanArriveBeforeAcceptanceAndNeverRegressRead() {
         String id=initiate().id();JsonNode status=map("{\"metadata\":{\"phone_number_id\":\"123400007\"},\"statuses\":[{\"id\":\"wamid.out1\",\"recipient_id\":\"970599000007\",\"status\":\"read\",\"timestamp\":\"1792660000\"},{\"id\":\"wamid.out1\",\"recipient_id\":\"970599000007\",\"status\":\"sent\",\"timestamp\":\"1792660001\"}]}");
-        service.acceptVerifiedValue(status);dispatch(id);assertEquals("READ",current(id).delivery());service.acceptVerifiedValue(status);assertEquals(2,store.inbox.size());
+        service=newService(p -> {service.acceptVerifiedValue(status);return new ReportingSender.Result("ACCEPTED","wamid.out1");});dispatch(id);assertEquals("READ",current(id).delivery());service.acceptVerifiedValue(status);assertEquals(2,store.inbox.size());
     }
     @Test void paginationRespectsTenRowLimitAndOnlyExplicitChoicesAppear() {
         for(long i=20;i<45;i++){store.choices.put(i,new Choice(i,"موقع "+i));store.activity.add(new MemoryReportingStore.Activity(7,i,LocalDate.of(2026,10,22)));}

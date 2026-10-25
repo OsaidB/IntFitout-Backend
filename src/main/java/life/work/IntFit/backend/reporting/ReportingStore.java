@@ -5,11 +5,13 @@ import java.util.List;
 import java.util.function.Supplier;
 import static life.work.IntFit.backend.reporting.ReportingModel.*;
 
-/** All mutations run in transaction(). Conversation/dispatch operations lock the pilot worker
- * before request/outbound rows, serializing pilot mutations. Network calls MUST be outside transactions. */
+/** All mutations run in transaction(). Worker conversation/dispatch operations lock the actual request worker
+ * before request/outbound rows; management operations lock their daily run first. Network calls MUST be outside transactions. */
 public interface ReportingStore {
     <T> T transaction(Supplier<T> action);
     Worker lockWorker(long id);
+    Worker inboundWorker(String recipient,String phoneId);
+    List<Worker> activeWorkers(LocalDate date);
     void configureWorker(long id, boolean eligible, String number);
     boolean configureSite(long id, boolean selectable);
     List<Choice> selectableSites();
@@ -35,9 +37,20 @@ public interface ReportingStore {
     void saveInbox(Inbox event);
     List<String> observedStatuses(String metaId);
     Outbound outbound(String id); // FOR UPDATE
+    Outbound peekOutbound(String id);
+    Outbound peekByMetaId(String id);
+    List<Outbound> unboundOutbounds(String recipient,String phoneId);
     Outbound byMetaId(String id);
     List<Outbound> outboundFor(String requestId);
     void insertOutbound(Outbound outbound);
     void saveOutbound(Outbound outbound);
     List<String> pendingIds(int limit);
+    DailyRun ensureRun(LocalDate date,String phoneId,java.time.Instant now,java.time.Instant cutoff,java.time.Instant expires,String owner,String father,String language);
+    DailyRun runByDate(LocalDate date,String phoneId);
+    DailyRun lockRun(String id);
+    void saveRun(DailyRun run);
+    void addRunMember(DailyMember member);
+    List<DailyMember> runMembers(String id);
+    void linkOpeningRun(String requestId,String runId);
+    List<Outbound> managementOutbound(String runId);
 }

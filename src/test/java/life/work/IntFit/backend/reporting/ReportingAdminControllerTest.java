@@ -39,17 +39,20 @@ class ReportingAdminControllerTest {
             case "dispatch" -> post(BASE+"/outbound/"+id+"/dispatch");
             case "resolve" -> post(BASE+"/outbound/"+id+"/resolve").contentType(MediaType.APPLICATION_JSON).content("{\"decision\":\"abandon\"}");
             case "entry" -> post(BASE+"/requests/"+id+"/entries/1/resolve").contentType(MediaType.APPLICATION_JSON).content("{\"masterWorksiteId\":11}");
+            case "previewDaily" -> post(BASE+"/daily/preview").contentType(MediaType.APPLICATION_JSON).content("{\"workDate\":\"2026-10-22\"}");
+            case "triggerDaily" -> post(BASE+"/daily-runs").contentType(MediaType.APPLICATION_JSON).content("{\"workDate\":\"2026-10-22\"}");
+            case "inspectDaily" -> get(BASE+"/daily-runs/2026-10-22");
             default -> throw new AssertionError();
         };
     }
-    @ParameterizedTest @ValueSource(strings={"status","workers","worksites","initiate","reports","report","dispatch","resolve","entry"})
+    @ParameterizedTest @ValueSource(strings={"status","workers","worksites","initiate","reports","report","dispatch","resolve","entry","previewDaily","triggerDaily","inspectDaily"})
     void allRoutesRejectMissingWrongAndDuplicateCredentialsWithoutTouchingStore(String route) throws Exception {
         mvc.perform(route(route)).andExpect(status().isForbidden());
         mvc.perform(route(route).header(HEADER,"wrong-secret")).andExpect(status().isForbidden());
         mvc.perform(route(route).header(HEADER,env.get("WHATSAPP_REPORTING_ADMIN_SECRET"),"duplicate")).andExpect(status().isForbidden());
         assertEquals(0,store.transactions);
     }
-    @ParameterizedTest @ValueSource(strings={"status","workers","worksites","initiate","reports","report","dispatch","resolve","entry"})
+    @ParameterizedTest @ValueSource(strings={"status","workers","worksites","initiate","reports","report","dispatch","resolve","entry","previewDaily","triggerDaily","inspectDaily"})
     void everyRouteFailsClosedWithMissingAdminConfiguration(String route) throws Exception {
         env.remove("WHATSAPP_REPORTING_ADMIN_SECRET");build();
         mvc.perform(route(route).header(HEADER,"anything")).andExpect(status().isServiceUnavailable());assertEquals(0,store.transactions);

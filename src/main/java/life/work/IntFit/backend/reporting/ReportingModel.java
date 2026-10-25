@@ -31,12 +31,23 @@ public final class ReportingModel {
         public Inbox disposition(String next) { return new Inbox(key,messageId,contextId,kind,action,requestId,next,receivedAt,messageAt,acceptedText); }
     }
     public record Outbound(String id, String requestId, long revision, String kind, String payload,
-                           String state, String metaId, String delivery, Instant createdAt) {
-        public Outbound result(String next, String id, String status) {
-            return new Outbound(this.id, requestId, revision, kind, payload, next, id, status, createdAt);
+                           String state, String metaId, String delivery, Instant createdAt,
+                           String recipientType,String recipientIdentity,String recipient,String phoneId,String runId,String failureCode) {
+        public Outbound(String id,String requestId,long revision,String kind,String payload,String state,String metaId,String delivery,Instant createdAt) {
+            this(id,requestId,revision,kind,payload,state,metaId,delivery,createdAt,"WORKER","WORKER",null,null,null,null);
         }
+        public Outbound result(String next, String id, String status) {
+            return new Outbound(this.id, requestId, revision, kind, payload, next, id, status, createdAt,recipientType,recipientIdentity,recipient,phoneId,runId,failureCode);
+        }
+        public Outbound blocked(String code) {return new Outbound(id,requestId,revision,kind,payload,"CANCELLED",null,null,createdAt,recipientType,recipientIdentity,recipient,phoneId,runId,code);}
+        public Outbound routed(String to,String phone,String run) {return new Outbound(id,requestId,revision,kind,payload,state,metaId,delivery,createdAt,recipientType,recipientIdentity,to,phone,run,failureCode);}
     }
-    public record OutboundView(String id, long revision, String kind, String state, String metaId, String delivery) { }
+    public record OutboundView(String id, long revision, String kind, String state, String metaId, String delivery,String failureCode,String recipientIdentity) { }
+    public record DailyRun(String id,String phoneId,LocalDate workDate,String phase,Instant createdAt,Instant cutoffAt,Instant expiresAt,String ownerRecipient,String fatherRecipient,String language,String failureCode,String summaryText,String summaryParameters) {
+        public DailyRun phase(String phase,String failure) {return new DailyRun(id,phoneId,workDate,phase,createdAt,cutoffAt,expiresAt,ownerRecipient,fatherRecipient,language,failure,null,null);}
+        public DailyRun snapshot(String text,String parameters) {return new DailyRun(id,phoneId,workDate,"SNAPSHOT",createdAt,cutoffAt,expiresAt,ownerRecipient,fatherRecipient,language,failureCode,text,parameters);}
+    }
+    public record DailyMember(String runId,long workerId,boolean configured,String exclusionCode,String requestId) { }
     public record ReportView(String id, long workerId, LocalDate workDate, String step, String outcome,
                              String reviewStatus, Instant submittedAt, List<Site> sites,
                              List<Coworker> coworkers, List<OutboundView> outbound, List<Inbox> inbox) { }

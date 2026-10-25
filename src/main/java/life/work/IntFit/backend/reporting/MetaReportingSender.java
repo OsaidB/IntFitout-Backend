@@ -27,12 +27,24 @@ public class MetaReportingSender implements ReportingSender {
         this.settings=settings; this.mapper=mapper; this.http=http;
     }
     @Override public Result send(String generatedPayload) {
-        if (!settings.sendingReady()) return new Result("REJECTED",null);
+        if (!settings.sendingReady() || settings.managementNumberMatches(settings.recipient)) return new Result("REJECTED",null);
+        return sendPayload(generatedPayload,settings.recipient,false);
+    }
+    @Override public Result send(ReportingModel.Outbound outbound) {
+        boolean management="MANAGEMENT".equals(outbound.recipientType());
+        if(!settings.transportReady() || !java.util.Objects.equals(settings.phoneId,outbound.phoneId()) || !ReportingSettings.canonicalNumber(outbound.recipient())) return new Result("REJECTED",null);
+        if(management ? (!settings.dailyEnabled || !settings.managementReady() || !java.util.Objects.equals(settings.managementRecipients().get(outbound.recipientIdentity()),outbound.recipient()))
+                : (!settings.sendingReady() || settings.managementNumberMatches(outbound.recipient()) || (!settings.rolloutEnabled && !java.util.Objects.equals(settings.recipient,outbound.recipient())))) return new Result("REJECTED",null);
+        return sendPayload(outbound.payload(),outbound.recipient(),management);
+    }
+    private Result sendPayload(String generatedPayload,String recipient,boolean management) {
         try {
             JsonNode payload = mapper.readTree(generatedPayload);
-            // Defense in depth against a stale/corrupted outbox changing the pilot recipient.
-            if (!settings.recipient.equals(payload.path("to").asText())
+            // Defense in depth against a stale/corrupted outbox changing the validated recipient snapshot.
+            if (!java.util.Objects.equals(recipient,payload.path("to").asText())
                     || !"whatsapp".equals(payload.path("messaging_product").asText())) return new Result("REJECTED",null);
+            if(management && (!"template".equals(payload.path("type").asText()) || !DailyReportingService.TEMPLATE.equals(payload.path("template").path("name").asText())
+                    || !java.util.Objects.equals(settings.managementLanguage,payload.path("template").path("language").path("code").asText()))) return new Result("REJECTED",null);
             HttpPost request = new HttpPost("https://graph.facebook.com/"+settings.version+"/"+settings.phoneId+"/messages");
             request.setConfig(WhatsAppHttpTransport.requestConfig());
             request.setHeader(HttpHeaders.AUTHORIZATION,"Bearer "+settings.accessToken);
@@ -48,7 +60,7 @@ public class MetaReportingSender implements ReportingSender {
                 if (body == null || body.has("error") || !"whatsapp".equals(body.path("messaging_product").asText())
                         || !messages.isArray() || messages.size()!=1) return new Result("UNCERTAIN",null);
                 String id=messages.get(0).path("id").asText("");
-                return safeId(id,settings) ? new Result("ACCEPTED",id) : new Result("UNCERTAIN",null);
+                return safeId(id,settings) && (recipient==null || !id.contains(recipient)) ? new Result("ACCEPTED",id) : new Result("UNCERTAIN",null);
             });
         } catch (IOException | RuntimeException ignored) {
             // Never log exception messages, headers, payloads, recipient, or provider response bodies.
@@ -58,6 +70,7 @@ public class MetaReportingSender implements ReportingSender {
     static boolean safeId(String id,ReportingSettings s) {
         return id != null && id.matches("wamid\\.[A-Za-z0-9._:+/=-]{1,512}")
                 && (s.recipient == null || !id.contains(s.recipient)) && (s.accessToken == null || !id.contains(s.accessToken))
+                && (s.ownerRecipient == null || !id.contains(s.ownerRecipient)) && (s.fatherRecipient == null || !id.contains(s.fatherRecipient))
                 && (s.adminSecret == null || !id.contains(s.adminSecret));
     }
     @PreDestroy public void close() { try { http.close(); } catch (IOException ignored) { } }

@@ -24,7 +24,7 @@ class ReportingOtherTest extends ReportingTestSupport {
         }
         store.selectable.clear();store.activity.add(new MemoryReportingStore.Activity(7,11,d.minusDays(6)));
         String id=initiate().id();assertTrue(store.activeWorker(7,d));assertFalse(store.activeSites(d).isEmpty());
-        store.activity.clear();assertThrows(ReportingProblem.class,() -> dispatch(id));assertEquals(0,sends.get());
+        store.activity.clear();dispatch(id);assertEquals("NO_RECENT_ACTIVITY",current(id).failureCode());assertEquals(0,sends.get());
     }
     @Test void palestineCalendarDayUsedInsteadOfUtcAndOngoingRepliesKeepOriginalDate() {
         clock.now=Instant.parse("2026-10-22T21:30:00Z"); // 00:30 on 23 October in Hebron before DST end.

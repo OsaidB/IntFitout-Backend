@@ -25,10 +25,10 @@ public class ReportingOutboxPump {
         this.settings=settings; this.service=service; this.schedulerFactory=schedulerFactory;
     }
     @EventListener(ApplicationReadyEvent.class) public synchronized void start() {
-        if (!settings.sendingReady() || executor!=null) return;
+        if (!settings.anySendingReady() || executor!=null) return;
         executor=schedulerFactory.get();
         executor.scheduleWithFixedDelay(this::runOnce,5,2,TimeUnit.SECONDS);
-        log.info("whatsapp_reporting outbox_processor=enabled daily_request_dispatcher=absent");
+        log.info("whatsapp_reporting outbox_processor=enabled");
     }
     void runOnce() {
         try { service.drainOne(); }

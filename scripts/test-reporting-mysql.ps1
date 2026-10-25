@@ -1,5 +1,10 @@
 [CmdletBinding()]
-param([string]$MavenExecutable = 'mvn.cmd')
+param(
+    [string]$MavenExecutable = 'mvn.cmd',
+    # Optional method selection within the same guarded integration class; no arbitrary suites.
+    [ValidatePattern('^[A-Za-z][A-Za-z0-9]*(\+[A-Za-z][A-Za-z0-9]*)*$')]
+    [string]$IntegrationMethods
+)
 
 # Only this script's freshly created local Docker resources may be used or removed.
 # No application properties, existing containers/volumes, or external database URLs are read.
@@ -91,6 +96,7 @@ try {
     $env:INTFITOUT_MYSQL_TEST_RUN_ID = $runId
     $env:MAVEN_SKIP_RC = '1'
     $suites = 'ReportingMySqlIntegrationTest'
+    if ($IntegrationMethods) { $suites += '#' + $IntegrationMethods }
     Push-Location -LiteralPath $projectRoot
     try {
         $logPath = Join-Path $projectRoot 'target/reporting-mysql-validation.log'

@@ -11,10 +11,18 @@ public final class ReportingSettings {
     final boolean enabled, sendEnabled, templateConfirmed;
     final String adminSecret, accessToken, phoneId, recipient, language, version;
     final Long workerId;
+    final boolean rolloutEnabled,dailyEnabled,managementTemplateConfirmed;
+    final String managementLanguage,ownerRecipient,fatherRecipient;
 
     public ReportingSettings() { this(System::getenv); }
     public ReportingSettings(Function<String, String> env) {
         enabled = yes(env.apply("WHATSAPP_REPORTING_ENABLED"));
+        rolloutEnabled=yes(env.apply("WHATSAPP_REPORTING_ROLLOUT_ENABLED"));
+        dailyEnabled=yes(env.apply("WHATSAPP_REPORTING_DAILY_ENABLED"));
+        managementTemplateConfirmed=yes(env.apply("WHATSAPP_REPORTING_MANAGEMENT_TEMPLATE_CONFIRMED"));
+        managementLanguage=env.apply("WHATSAPP_REPORTING_MANAGEMENT_TEMPLATE_LANGUAGE");
+        ownerRecipient=managementNumber(env.apply("WHATSAPP_REPORTING_MANAGEMENT_OWNER_RECIPIENT"));
+        fatherRecipient=managementNumber(env.apply("WHATSAPP_REPORTING_MANAGEMENT_FATHER_RECIPIENT"));
         sendEnabled = yes(env.apply("WHATSAPP_REPORTING_SEND_ENABLED"));
         templateConfirmed = yes(env.apply("WHATSAPP_REPORTING_TEMPLATE_CONFIRMED"));
         adminSecret = env.apply("WHATSAPP_REPORTING_ADMIN_SECRET");
@@ -41,15 +49,36 @@ public final class ReportingSettings {
                 && MessageDigest.isEqual(adminSecret.getBytes(StandardCharsets.UTF_8), supplied.getBytes(StandardCharsets.UTF_8));
     }
     public boolean receivingReady() {
-        return enabled && workerId != null && phoneId != null && phoneId.matches("[0-9]{1,30}")
-                && canonicalNumber(recipient);
+        return enabled && phoneId != null && phoneId.matches("[0-9]{1,30}") && (rolloutEnabled || pilotReady());
     }
     public boolean sendingReady() {
-        return receivingReady() && sendEnabled && templateConfirmed && adminConfigured()
-                && language != null && language.matches("ar(?:_[A-Z]{2})?")
+        return receivingReady() && transportReady() && templateConfirmed
+                && language != null && language.matches("ar(?:_[A-Z]{2})?");
+    }
+    boolean pilotReady() {return workerId!=null && canonicalNumber(recipient);}
+    boolean transportReady() {
+        return enabled && sendEnabled && adminConfigured() && phoneId!=null && phoneId.matches("[0-9]{1,30}")
                 && accessToken != null && !accessToken.isBlank()
                 && accessToken.codePoints().allMatch(c -> c >= 33 && c <= 126)
                 && version != null && version.matches("v[1-9][0-9]{0,2}\\.[0-9]{1,2}");
+    }
+    boolean managementReady() {
+        return transportReady() && managementTemplateConfirmed && managementLanguage!=null && managementLanguage.matches("ar(?:_[A-Z]{2})?")
+                && ownerRecipient!=null && fatherRecipient!=null && !ownerRecipient.equals(fatherRecipient);
+    }
+    boolean dailyReady() {return dailyEnabled && transportReady() && templateConfirmed && language!=null && language.matches("ar(?:_[A-Z]{2})?") && managementReady();}
+    boolean anySendingReady() {return sendingReady() || (dailyEnabled && managementReady());}
+    boolean managementNumberMatches(String number) {return number!=null && (number.equals(ownerRecipient) || number.equals(fatherRecipient));}
+    boolean allowsWorker(ReportingModel.Worker worker) {
+        return worker!=null && worker.eligible() && canonicalNumber(worker.number()) && !managementNumberMatches(worker.number())
+                && (rolloutEnabled || (pilotReady() && worker.id()==workerId && recipient.equals(worker.number())));
+    }
+    java.util.Map<String,String> managementRecipients() {
+        if(ownerRecipient==null || fatherRecipient==null || ownerRecipient.equals(fatherRecipient)) return java.util.Map.of();
+        return java.util.Map.of("OWNER",ownerRecipient,"FATHER",fatherRecipient);
+    }
+    private static String managementNumber(String number) {
+        try {return normalizeNumber(number);} catch(ReportingProblem e) {return null;}
     }
     static boolean canonicalNumber(String s) { return s != null && s.matches("[1-9][0-9]{6,14}"); }
     /** Accept explicit international digits or a leading + only. Never infer a country prefix. */

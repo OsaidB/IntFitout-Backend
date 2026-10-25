@@ -19,10 +19,25 @@ public class ReportingAdminController {
     private final ReportingSettings settings;
     private final ReportingService service;
     private final ReportingResolutionService resolutions;
+    private final DailyReportingService daily;
     private final com.fasterxml.jackson.databind.ObjectMapper mapper=new com.fasterxml.jackson.databind.ObjectMapper();
-    public ReportingAdminController(ReportingSettings settings,ReportingService service) { this(settings,service,null); }
+    public ReportingAdminController(ReportingSettings settings,ReportingService service) { this(settings,service,null,null); }
+    public ReportingAdminController(ReportingSettings settings,ReportingService service,ReportingResolutionService resolutions) {this(settings,service,resolutions,null);}
     @org.springframework.beans.factory.annotation.Autowired
-    public ReportingAdminController(ReportingSettings settings,ReportingService service,ReportingResolutionService resolutions) { this.settings=settings; this.service=service;this.resolutions=resolutions; }
+    public ReportingAdminController(ReportingSettings settings,ReportingService service,ReportingResolutionService resolutions,DailyReportingService daily) { this.settings=settings; this.service=service;this.resolutions=resolutions;this.daily=daily; }
+    @PostMapping("/daily/preview") public ResponseEntity<?> previewDaily(HttpServletRequest http,@RequestBody JsonNode body) {
+        return guarded(http,() -> daily.preview(workDate(body)));
+    }
+    @PostMapping("/daily-runs") public ResponseEntity<?> triggerDaily(HttpServletRequest http,@RequestBody JsonNode body) {
+        return guarded(http,() -> daily.trigger(workDate(body)));
+    }
+    @GetMapping("/daily-runs/{date}") public ResponseEntity<?> inspectDaily(HttpServletRequest http,@PathVariable String date) {
+        return guarded(http,() -> {try{return daily.inspect(LocalDate.parse(date));}catch(java.time.format.DateTimeParseException e){throw new ReportingProblem(400,"Date must be ISO yyyy-MM-dd.");}});
+    }
+    private static LocalDate workDate(JsonNode body) {
+        fields(body,Set.of("workDate"));
+        try{return LocalDate.parse(body.path("workDate").asText());}catch(java.time.format.DateTimeParseException e){throw new ReportingProblem(400,"workDate must be ISO yyyy-MM-dd.");}
+    }
     @GetMapping("/status") public ResponseEntity<?> status(HttpServletRequest http) {
         return guarded(http,service::status);
     }

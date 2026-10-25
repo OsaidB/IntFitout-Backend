@@ -26,6 +26,12 @@ public class JdbcReportingStore implements ReportingStore {
         return one(jdbc.query("SELECT id,name,whatsapp_reporting_eligible,whatsapp_number FROM team_members WHERE id=? FOR UPDATE",
                 (r,n) -> new Worker(r.getLong(1), r.getString(2), r.getBoolean(3), r.getString(4)), id));
     }
+    @Override public Worker inboundWorker(String recipient,String phone) {
+        return one(jdbc.query("SELECT w.id,w.name,w.whatsapp_reporting_eligible,w.whatsapp_number FROM team_members w WHERE w.whatsapp_number=? AND EXISTS(SELECT 1 FROM whatsapp_report_requests r WHERE r.worker_id=w.id AND r.recipient=? AND r.phone_id=?)",WORKER,recipient,recipient,phone));
+    }
+    @Override public List<Worker> activeWorkers(LocalDate date) {
+        return jdbc.query("SELECT w.id,w.name,w.whatsapp_reporting_eligible,w.whatsapp_number FROM team_members w WHERE EXISTS(SELECT 1 FROM work_assignments a WHERE a.team_member_id=w.id AND a.date BETWEEN ? AND ?) ORDER BY w.id",WORKER,date.minusDays(6),date);
+    }
     @Override public void configureWorker(long id, boolean eligible, String number) {
         jdbc.update("UPDATE team_members SET whatsapp_reporting_eligible=?,whatsapp_number=? WHERE id=?", eligible, number, id);
     }
@@ -118,15 +124,47 @@ public class JdbcReportingStore implements ReportingStore {
         return jdbc.query("SELECT * FROM whatsapp_report_outbound WHERE request_id=? ORDER BY revision", OUTBOUND,id);
     }
     @Override public void insertOutbound(Outbound o) {
-        jdbc.update("INSERT INTO whatsapp_report_outbound(id,request_id,revision,kind,payload,state,created_at) VALUES(?,?,?,?,?,?,?)",
-                o.id(),o.requestId(),o.revision(),o.kind(),o.payload(),o.state(),ts(o.createdAt()));
+        // Legacy constructor support derives routing from the actual request, never from payload text.
+        Request r=o.requestId()==null ? null : request(o.requestId());
+        String recipient=o.recipient()!=null ? o.recipient() : r.recipient();
+        String phone=o.phoneId()!=null ? o.phoneId() : r.phoneId();
+        jdbc.update("INSERT INTO whatsapp_report_outbound(id,request_id,revision,kind,payload,state,created_at,recipient_type,recipient_identity,recipient,phone_id,run_id,failure_code) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                o.id(),o.requestId(),o.revision(),o.kind(),o.payload(),o.state(),ts(o.createdAt()),o.recipientType(),o.recipientIdentity(),recipient,phone,o.runId(),o.failureCode());
     }
     @Override public void saveOutbound(Outbound o) {
-        jdbc.update("UPDATE whatsapp_report_outbound SET state=?,meta_id=?,delivery=? WHERE id=?",o.state(),o.metaId(),o.delivery(),o.id());
+        jdbc.update("UPDATE whatsapp_report_outbound SET state=?,meta_id=?,delivery=?,failure_code=? WHERE id=?",o.state(),o.metaId(),o.delivery(),o.failureCode(),o.id());
     }
     @Override public List<String> pendingIds(int limit) {
-        return jdbc.queryForList("SELECT id FROM whatsapp_report_outbound WHERE state='PENDING' ORDER BY created_at,id LIMIT ?",String.class,limit);
+        return jdbc.queryForList("SELECT id FROM whatsapp_report_outbound WHERE state='PENDING' ORDER BY CASE WHEN recipient_type='MANAGEMENT' THEN 0 WHEN kind='TEMPLATE' THEN 1 ELSE 2 END,created_at,id LIMIT ?",String.class,limit);
     }
+    @Override public Outbound peekOutbound(String id) {return one(jdbc.query("SELECT * FROM whatsapp_report_outbound WHERE id=?",OUTBOUND,id));}
+    @Override public Outbound peekByMetaId(String id) {return one(jdbc.query("SELECT * FROM whatsapp_report_outbound WHERE meta_id=?",OUTBOUND,id));}
+    @Override public List<Outbound> unboundOutbounds(String recipient,String phone) {
+        return jdbc.query("SELECT * FROM whatsapp_report_outbound WHERE recipient=? AND phone_id=? AND meta_id IS NULL AND state IN ('SENDING','UNCERTAIN') ORDER BY created_at,id",OUTBOUND,recipient,phone);
+    }
+    @Override public DailyRun ensureRun(LocalDate date,String phone,Instant now,Instant cutoff,Instant expires,String owner,String father,String language) {
+        // No-op duplicate update obtains an exclusive duplicate-row lock directly. INSERT IGNORE
+        // takes shared duplicate locks whose later FOR UPDATE upgrades can deadlock concurrent ticks.
+        jdbc.update("INSERT INTO whatsapp_daily_runs(id,phone_id,work_date,phase,created_at,cutoff_at,expires_at,owner_recipient,father_recipient,template_language) VALUES(?,?,?,'NEW',?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=whatsapp_daily_runs.id",java.util.UUID.randomUUID().toString(),phone,date,ts(now),ts(cutoff),ts(expires),owner,father,language);
+        return one(jdbc.query("SELECT * FROM whatsapp_daily_runs WHERE phone_id=? AND work_date=? FOR UPDATE",RUN,phone,date));
+    }
+    @Override public DailyRun runByDate(LocalDate date,String phone) {return one(jdbc.query("SELECT * FROM whatsapp_daily_runs WHERE phone_id=? AND work_date=?",RUN,phone,date));}
+    @Override public DailyRun lockRun(String id) {return one(jdbc.query("SELECT * FROM whatsapp_daily_runs WHERE id=? FOR UPDATE",RUN,id));}
+    @Override public void saveRun(DailyRun r) {
+        jdbc.update("UPDATE whatsapp_daily_runs SET phase=?,failure_code=?,summary_text=?,summary_parameters=? WHERE id=? AND summary_parameters IS NULL",r.phase(),r.failureCode(),r.summaryText(),r.summaryParameters(),r.id());
+    }
+    @Override public void addRunMember(DailyMember m) {
+        jdbc.update("INSERT INTO whatsapp_daily_members(run_id,worker_id,configured,exclusion_code,request_id) VALUES(?,?,?,?,?)",m.runId(),m.workerId(),m.configured(),m.exclusionCode(),m.requestId());
+    }
+    @Override public List<DailyMember> runMembers(String id) {
+        return jdbc.query("SELECT * FROM whatsapp_daily_members WHERE run_id=? ORDER BY worker_id",(r,n) -> new DailyMember(r.getString("run_id"),r.getLong("worker_id"),r.getBoolean("configured"),r.getString("exclusion_code"),r.getString("request_id")),id);
+    }
+    @Override public void linkOpeningRun(String request,String run) {
+        jdbc.update("UPDATE whatsapp_report_outbound SET run_id=? WHERE request_id=? AND kind='TEMPLATE' AND run_id IS NULL",run,request);
+    }
+    @Override public List<Outbound> managementOutbound(String run) {return jdbc.query("SELECT * FROM whatsapp_report_outbound WHERE run_id=? AND recipient_type='MANAGEMENT' ORDER BY recipient_identity",OUTBOUND,run);}
+    private static final RowMapper<Worker> WORKER=(r,n) -> new Worker(r.getLong(1),r.getString(2),r.getBoolean(3),r.getString(4));
+    private static final RowMapper<DailyRun> RUN=(r,n) -> new DailyRun(r.getString("id"),r.getString("phone_id"),r.getDate("work_date").toLocalDate(),r.getString("phase"),instant(r,"created_at"),instant(r,"cutoff_at"),instant(r,"expires_at"),r.getString("owner_recipient"),r.getString("father_recipient"),r.getString("template_language"),r.getString("failure_code"),r.getString("summary_text"),r.getString("summary_parameters"));
     private static <T> T one(List<T> rows) { return rows.isEmpty() ? null : rows.get(0); }
     private static Timestamp ts(Instant i) { return i == null ? null : Timestamp.from(i); }
     private static Instant instant(java.sql.ResultSet r,String column) throws java.sql.SQLException {
@@ -139,5 +177,5 @@ public class JdbcReportingStore implements ReportingStore {
             instant(r,"created_at"),instant(r,"last_inbound_at"),instant(r,"submitted_at"));
     private static final RowMapper<Outbound> OUTBOUND = (r,n) -> new Outbound(r.getString("id"),r.getString("request_id"),
             r.getLong("revision"),r.getString("kind"),r.getString("payload"),r.getString("state"),
-            r.getString("meta_id"),r.getString("delivery"),instant(r,"created_at"));
+            r.getString("meta_id"),r.getString("delivery"),instant(r,"created_at"),r.getString("recipient_type"),r.getString("recipient_identity"),r.getString("recipient"),r.getString("phone_id"),r.getString("run_id"),r.getString("failure_code"));
 }

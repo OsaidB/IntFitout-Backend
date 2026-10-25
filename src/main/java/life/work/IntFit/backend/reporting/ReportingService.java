@@ -29,7 +29,7 @@ public class ReportingService {
     public Map<String,Object> status() {
         return Map.of("reportingEnabled",settings.enabled,"sendingEnabled",settings.sendEnabled,
                 "pilotConfigurationReady",settings.receivingReady(),"sendingConfigurationReady",settings.sendingReady(),
-                "automaticDailyRequests",false);
+                "automaticDailyRequests",settings.dailyEnabled,"rolloutEnabled",settings.rolloutEnabled,"dailyConfigurationReady",settings.dailyReady());
     }
     public void configureWorker(long id,boolean eligible,String suppliedNumber) {
         String number=ReportingSettings.normalizeNumber(suppliedNumber);
@@ -49,17 +49,28 @@ public class ReportingService {
         requireSending();
         if (date==null || !date.equals(LocalDate.now(clock.withZone(ZONE))))
             throw new ReportingProblem(400,"Pilot initiation requires today's Asia/Hebron work date.");
+        if(!settings.pilotReady()) throw new ReportingProblem(409,"Explicit pilot identity is required for manual pilot initiation.");
         return store.transaction(() -> {
-            requirePilot(store.lockWorker(settings.workerId));
-            Request existing=store.request(settings.workerId,date);
-            if (existing!=null) return view(existing);
-            requireActivity(settings.workerId,date);
-            Request r=new Request(UUID.randomUUID().toString(),settings.workerId,settings.recipient,settings.phoneId,date,
-                    "START",0,null,null,clock.instant(),null,null);
-            store.insertRequest(r);
-            intent(r,"TEMPLATE",flow.template(r,settings.language));
-            return view(r);
+            Worker worker=store.lockWorker(settings.workerId);requireWorker(worker);
+            if(!settings.recipient.equals(worker.number())) throw new ReportingProblem(409,"Manual pilot recipient must match its explicitly configured worker number.");
+            return view(ensureRequest(settings.workerId,date,null));
         });
+    }
+    // Called within the daily run transaction; no caller-supplied recipients or message overrides.
+    Request ensureRequest(long workerId,LocalDate date,String runId) {
+        Worker worker=store.lockWorker(workerId); requireWorker(worker);
+        Request existing=store.request(workerId,date);
+        if(existing!=null) {
+            if(!matchesRequest(worker,existing)) throw new ReportingProblem(409,"Existing request routing snapshots differ from current worker/sender setup.");
+            if(runId!=null) store.linkOpeningRun(existing.id(),runId);
+            return existing;
+        }
+        requireActivity(workerId,date);
+        Request r=new Request(UUID.randomUUID().toString(),workerId,worker.number(),settings.phoneId,date,
+                "START",0,null,null,clock.instant(),null,null);
+        store.insertRequest(r);
+        store.insertOutbound(new Outbound(UUID.randomUUID().toString(),r.id(),0,"TEMPLATE",flow.template(r,settings.language),"PENDING",null,null,clock.instant()).routed(r.recipient(),r.phoneId(),runId));
+        return r;
     }
     public List<ReportView> reports(int limit) {
         if (limit<1 || limit>100) throw new ReportingProblem(400,"Limit must be between 1 and 100.");
@@ -67,8 +78,9 @@ public class ReportingService {
     }
     public ReportView report(String id) {
         validUuid(id);
+        Long owner=store.requestWorkerId(id);
         return store.transaction(() -> {
-            lockPilotIfConfigured();
+            if(owner!=null) store.lockWorker(owner);
             Request r=store.request(id);
             if (r==null) throw new ReportingProblem(404,"Reporting request not found.");
             return view(r);
@@ -77,36 +89,36 @@ public class ReportingService {
     private ReportView view(Request r) {
         return new ReportView(r.id(),r.workerId(),r.workDate(),r.step(),r.outcome(),r.submittedAt()==null ? "DRAFT" : "AWAITING_REVIEW",
                 r.submittedAt(),store.sites(r.id()),store.mentions(r.id()),store.outboundFor(r.id()).stream()
-                .map(o -> new OutboundView(o.id(),o.revision(),o.kind(),o.state(),o.metaId(),o.delivery())).toList(),store.inboxFor(r.id()));
+                .map(o -> outboundView(o)).toList(),store.inboxFor(r.id()));
     }
 
     /** Called ONLY after the controller has authenticated the original HTTP bytes. One transaction per event.
      * If any transaction fails, propagate to the controller for a sanitized 503; Meta may redeliver the batch. */
     public void acceptVerifiedValue(JsonNode value) {
-        if (!settings.receivingReady() || !settings.phoneId.equals(value.path("metadata").path("phone_number_id").asText())) return;
+        if (!settings.enabled || !Objects.equals(settings.phoneId,value.path("metadata").path("phone_number_id").asText())) return;
         for (JsonNode m:array(value.path("messages"))) {
-            if (m.isObject() && settings.recipient.equals(m.path("from").asText())) receiveMessage(m);
+            String from=m.path("from").asText();
+            if(!settings.receivingReady() || !ReportingSettings.canonicalNumber(from) || settings.managementNumberMatches(from)) continue;
+            Worker worker=store.inboundWorker(from,settings.phoneId);
+            if(worker!=null && settings.allowsWorker(worker)) receiveMessage(m,worker.id());
         }
-        for (JsonNode s:array(value.path("statuses"))) {
-            if (s.isObject() && settings.recipient.equals(s.path("recipient_id").asText())) receiveStatus(s);
-        }
+        for (JsonNode status:array(value.path("statuses"))) if(status.isObject()) receiveStatus(status);
     }
-    private void receiveMessage(JsonNode m) {
+    private void receiveMessage(JsonNode m,long workerId) {
         String messageId=externalId(m.path("id").asText());
         if (messageId==null) return;
-        if ("text".equals(m.path("type").asText())) { receiveText(m,messageId); return; }
+        if ("text".equals(m.path("type").asText())) { receiveText(m,messageId,workerId); return; }
         String context=externalId(m.path("context").path("id").asText());
         String actionValue=actionValue(m);
         ReportingFlow.Action action=ReportingFlow.action(actionValue);
         Instant sentAt=messageTime(m.path("timestamp").asText());
         String key=hash("message:"+settings.phoneId+":"+messageId);
         store.transaction(() -> {
-            Worker worker=store.lockWorker(settings.workerId);
+            Worker worker=store.lockWorker(workerId);
             if (store.hasInbox(key)) return null;
             String disposition="IGNORED";
             Request r=action==null ? null : store.request(action.requestId());
-            if (r!=null && sentAt!=null && pilotMatches(worker) && r.workerId()==settings.workerId
-                    && settings.recipient.equals(r.recipient()) && settings.phoneId.equals(r.phoneId())
+            if (r!=null && sentAt!=null && matchesRequest(worker,r)
                     && r.submittedAt()==null && r.revision()==action.revision()) {
                 Outbound prompt=store.outboundFor(r.id()).stream().filter(o -> o.revision()==r.revision()).findFirst().orElse(null);
                 if (prompt!=null && context!=null && flow.issued(prompt.payload(),actionValue)) {
@@ -177,7 +189,7 @@ public class ReportingService {
     /** Text is never assigned to the latest phone request. Lock the pilot, then inspect persisted captures.
      * Without context, exactly one capture with an accepted prompt is required. Conflicting supplied
      * context is never discarded. Uncertain contextual replies defer until evidenced Meta binding. */
-    private void receiveText(JsonNode m,String messageId) {
+    private void receiveText(JsonNode m,String messageId,long workerId) {
         boolean contextProvided=m.has("context");
         String supplied=m.path("context").path("id").asText(null);
         String context=externalId(supplied);
@@ -186,10 +198,9 @@ public class ReportingService {
         Instant sentAt=messageTime(m.path("timestamp").asText());
         String key=hash("message:"+settings.phoneId+":"+messageId);
         store.transaction(() -> {
-            Worker worker=store.lockWorker(settings.workerId);
+            Worker worker=store.lockWorker(workerId);
             if (store.hasInbox(key)) return null;
-            List<Request> captures=store.textCaptures(settings.workerId).stream().filter(r ->
-                    settings.recipient.equals(r.recipient()) && settings.phoneId.equals(r.phoneId())).toList();
+            List<Request> captures=store.textCaptures(workerId).stream().filter(r -> matchesRequest(worker,r)).toList();
             List<Request> candidates=captures.stream().filter(r -> {
                 Outbound p=currentPrompt(r);
                 return p!=null && ((context!=null && context.equals(p.metaId())) ||
@@ -200,7 +211,7 @@ public class ReportingService {
             Request r=candidates.size()==1 ? candidates.getFirst() : null;
             String disposition=captures.size()>1 && !contextProvided ? "AMBIGUOUS" : "IGNORED";
             String action=null,storedText=null;
-            if (r!=null && pilotMatches(worker) && sentAt!=null) {
+            if (r!=null && workerAllowed(worker) && sentAt!=null) {
                 Outbound p=currentPrompt(r);
                 // Seconds are Meta's timestamp precision; do not reject same-second replies.
                 if (p!=null && !sentAt.isBefore(p.createdAt().truncatedTo(java.time.temporal.ChronoUnit.SECONDS))) {
@@ -228,20 +239,29 @@ public class ReportingService {
         Request updated=r.advance(description==null ? "OTHER_TEXT" : "COWORKERS",entry,r.outcome(),last,false);
         store.saveRequest(updated);prompt(updated,0);
     }
-    private void receiveStatus(JsonNode s) {
-        String metaId=externalId(s.path("id").asText());
-        String status=s.path("status").asText();
-        if (metaId==null || !Set.of("sent","delivered","read","failed").contains(status)) return;
-        String stamp=s.path("timestamp").asText("");
-        if (!stamp.matches("[0-9]{1,12}")) stamp="";
-        String key=hash("status:"+settings.phoneId+":"+metaId+":"+status+":"+stamp);
+    private void receiveStatus(JsonNode status) {
+        String metaId=externalId(status.path("id").asText());String recipient=status.path("recipient_id").asText();
+        String state=status.path("status").asText();
+        if(metaId==null || !ReportingSettings.canonicalNumber(recipient) || !Set.of("sent","delivered","read","failed").contains(state)) return;
+        Outbound target=store.peekByMetaId(metaId);
+        if(target==null) {
+            List<Outbound> unbound=store.unboundOutbounds(recipient,settings.phoneId);
+            if(unbound.size()!=1) return; // Never attach arbitrary statuses to the latest report.
+            target=unbound.getFirst();
+        }
+        if(!recipient.equals(target.recipient()) || !Objects.equals(settings.phoneId,target.phoneId())) return;
+        Routing route=routing(target);
+        String stamp=status.path("timestamp").asText("");if(!stamp.matches("[0-9]{1,12}")) stamp="";
+        String key=hash("status:"+settings.phoneId+":"+metaId+":"+state+":"+stamp);
         store.transaction(() -> {
-            store.lockWorker(settings.workerId);
-            if (store.hasInbox(key)) return null;
-            Outbound o=store.byMetaId(metaId);
-            store.insertInbox(new Inbox(key,metaId,null,"STATUS_"+status.toUpperCase(Locale.ROOT),null,
-                    o==null ? null : o.requestId(),o==null ? "UNMATCHED" : "RECORDED",clock.instant(),null));
-            if (o!=null) store.saveOutbound(o.result(o.state(),o.metaId(),delivery(o.metaId())));
+            lockOwner(route);
+            if(store.hasInbox(key)) return null;
+            Outbound current=store.outbound(route.outbound().id());
+            if(current==null || !recipient.equals(current.recipient()) || !Objects.equals(settings.phoneId,current.phoneId())) return null;
+            if(current.metaId()!=null && !metaId.equals(current.metaId())) return null;
+            if(current.metaId()==null && !Set.of("SENDING","UNCERTAIN").contains(current.state())) return null;
+            store.insertInbox(new Inbox(key,metaId,null,"STATUS_"+state.toUpperCase(Locale.ROOT),null,current.requestId(),current.metaId()==null ? "UNMATCHED" : "RECORDED",clock.instant(),null));
+            if(metaId.equals(current.metaId())) store.saveOutbound(current.result(current.state(),current.metaId(),delivery(metaId)));
             return null;
         });
     }
@@ -251,77 +271,104 @@ public class ReportingService {
         return null;
     }
     private void intent(Request r,String kind,String payload) {
-        store.insertOutbound(new Outbound(UUID.randomUUID().toString(),r.id(),r.revision(),kind,payload,"PENDING",null,null,clock.instant()));
+        store.insertOutbound(new Outbound(UUID.randomUUID().toString(),r.id(),r.revision(),kind,payload,"PENDING",null,null,clock.instant()).routed(r.recipient(),r.phoneId(),null));
     }
 
     /** Claim commits BEFORE HTTP. SENDING/UNCERTAIN/REJECTED/ACCEPTED are never automatically retried. */
     public OutboundView dispatch(String id) {
-        validUuid(id); requireSending();
+        validUuid(id);
+        if(!settings.transportReady()) throw new ReportingProblem(503,"Reporting sending is paused or transport configuration is incomplete.");
+        Outbound original=store.peekOutbound(id);
+        if(original==null) throw new ReportingProblem(404,"Outbound intent not found.");
+        Routing route=routing(original);
         Claim claim=store.transaction(() -> {
-            requirePilot(store.lockWorker(settings.workerId));
+            Worker worker=lockOwner(route);
             Outbound o=store.outbound(id);
-            if (o==null) throw new ReportingProblem(404,"Outbound intent not found.");
-            if (!"PENDING".equals(o.state())) return new Claim(o,false);
-            Request r=store.request(o.requestId());
-            if (r==null || r.workerId()!=settings.workerId || !settings.recipient.equals(r.recipient()) || !settings.phoneId.equals(r.phoneId()))
-                throw new ReportingProblem(409,"Outbound intent does not match the configured pilot and real sender.");
-            if(o.kind().equals("TEMPLATE")) requireActivity(r.workerId(),r.workDate());
-            boolean expired=o.revision()!=r.revision()
-                    || (o.kind().equals("TEMPLATE") && !r.workDate().equals(LocalDate.now(clock.withZone(ZONE))))
-                    || (!o.kind().equals("TEMPLATE") && (r.lastInboundAt()==null || !r.lastInboundAt().isAfter(clock.instant().minus(Duration.ofHours(24)))));
-            Outbound changed=o.result(expired ? "CANCELLED" : "SENDING",null,null);
-            store.saveOutbound(changed); return new Claim(changed,!expired);
+            if(!"PENDING".equals(o.state())) return new Claim(o,false);
+            String blocked=null;
+            if(!Objects.equals(settings.phoneId,o.phoneId())) blocked="SENDER_CHANGED";
+            if(o.recipientType().equals("MANAGEMENT")) {
+                DailyRun run=store.lockRun(o.runId());
+                if(!settings.dailyEnabled || !settings.managementReady() || !Objects.equals(settings.managementRecipients().get(o.recipientIdentity()),o.recipient())) blocked="MANAGEMENT_SETUP_CHANGED";
+                if(run==null || !run.workDate().equals(LocalDate.now(clock.withZone(ZONE))) || !clock.instant().isBefore(run.expiresAt())) blocked="SUMMARY_EXPIRED";
+                else if(!run.phase().equals("SNAPSHOT") || !Objects.equals(settings.managementLanguage,run.language())) blocked="MANAGEMENT_SETUP_CHANGED";
+            } else {
+                Request r=store.request(o.requestId());
+                if(!settings.sendingReady() || !matchesRequest(worker,r) || !Objects.equals(o.recipient(),r.recipient())) blocked="WORKER_SETUP_CHANGED";
+                if(r!=null && o.kind().equals("TEMPLATE")) {
+                    if(!store.activeWorker(r.workerId(),r.workDate())) blocked="NO_RECENT_ACTIVITY";
+                    if(!r.workDate().equals(LocalDate.now(clock.withZone(ZONE)))) blocked="OPENING_EXPIRED";
+                    if(o.runId()!=null) {
+                        DailyRun run=store.runByDate(r.workDate(),r.phoneId());
+                        if(!settings.dailyReady() || run==null || !clock.instant().isBefore(run.cutoffAt())) blocked="DAILY_OPENING_CLOSED";
+                    }
+                }
+                if(r!=null && (o.revision()!=r.revision() || (!o.kind().equals("TEMPLATE") && (r.lastInboundAt()==null || !r.lastInboundAt().isAfter(clock.instant().minus(Duration.ofHours(24))))))) blocked="PROMPT_EXPIRED";
+            }
+            Outbound changed=blocked==null ? o.result("SENDING",null,null) : o.blocked(blocked);
+            store.saveOutbound(changed);return new Claim(changed,blocked==null);
         });
-        if (!claim.claimed()) return outboundView(claim.outbound());
-        return finishClaim(claim.outbound());
+        return claim.claimed() ? finishClaim(claim.outbound()) : outboundView(claim.outbound());
+    }
+    private record Routing(Outbound outbound,Long workerId) { }
+    private Routing routing(Outbound o) {return new Routing(o,o.requestId()==null ? null : store.requestWorkerId(o.requestId()));}
+    private Worker lockOwner(Routing route) {
+        if(route.outbound().recipientType().equals("MANAGEMENT")) {store.lockRun(route.outbound().runId());return null;}
+        return route.workerId()==null ? null : store.lockWorker(route.workerId());
     }
     private record Claim(Outbound outbound,boolean claimed) { }
     private OutboundView finishClaim(Outbound claim) {
         ReportingSender.Result result;
-        try { result=sender.send(claim.payload()); }
+        try { result=sender.send(claim); }
         catch (RuntimeException ignored) { result=new ReportingSender.Result("UNCERTAIN",null); }
         if (result==null || result.state()==null || !Set.of("ACCEPTED","REJECTED","UNCERTAIN").contains(result.state())
                 || (result.state().equals("ACCEPTED") && !MetaReportingSender.safeId(result.metaId(),settings)))
             result=new ReportingSender.Result("UNCERTAIN",null);
         final ReportingSender.Result outcome=result;
+        Routing route=routing(claim);
         Outbound finished=store.transaction(() -> {
-            store.lockWorker(settings.workerId);
+            lockOwner(route);
             Outbound current=store.outbound(claim.id());
             // A recovery operator can close a stranded SENDING attempt. Never overwrite that decision.
             if (!current.state().equals("SENDING")) return current;
             Outbound updated=current.result(outcome.state(),outcome.metaId(),outcome.metaId()==null ? null : delivery(outcome.metaId()));
             store.saveOutbound(updated);
-            if (updated.state().equals("ACCEPTED")) replayDeferred(updated.requestId());
+            if (updated.state().equals("ACCEPTED") && updated.requestId()!=null) replayDeferred(updated.requestId());
             return updated;
         });
         log.info("whatsapp_reporting outbound={} result={}",claim.id(),finished.state());
         return outboundView(finished);
     }
     public void drainOne() {
-        if (!settings.sendingReady()) return;
-        List<String> ids=store.pendingIds(1);
-        if (!ids.isEmpty()) dispatch(ids.get(0));
+        if(!settings.anySendingReady()) return;
+        // A blocked individual becomes visibly CANCELLED; continue to a valid item this pass.
+        for(String id:store.pendingIds(50)) {
+            OutboundView result=dispatch(id);
+            if(!"CANCELLED".equals(result.state())) break;
+        }
     }
     /** Evidence-based reconciliation only. No operation resets an attempted message to PENDING. */
     public OutboundView resolve(String id,String decision,String metaId) {
         validUuid(id);
         if (!Set.of("accepted","abandon").contains(decision==null ? "" : decision)) throw new ReportingProblem(400,"Decision must be accepted or abandon.");
-        if (decision.equals("accepted") && (!settings.receivingReady() || !MetaReportingSender.safeId(metaId,settings)))
-            throw new ReportingProblem(400,"Accepted reconciliation requires a validated Meta message ID and complete receiving pilot settings.");
+        if (decision.equals("accepted") && (!settings.enabled || settings.phoneId==null || !MetaReportingSender.safeId(metaId,settings)))
+            throw new ReportingProblem(400,"Accepted reconciliation requires a validated Meta message ID and a configured receiving business sender.");
+        Outbound original=store.peekOutbound(id);
+        if(original==null) throw new ReportingProblem(404,"Outbound intent not found.");
+        Routing route=routing(original);
         return store.transaction(() -> {
-            lockPilotIfConfigured();
+            lockOwner(route);
             Outbound o=store.outbound(id);
             if (o==null) throw new ReportingProblem(404,"Outbound intent not found.");
-            Request r=store.request(o.requestId());
-            if (decision.equals("accepted") && (r==null || r.workerId()!=settings.workerId || !settings.recipient.equals(r.recipient()) || !settings.phoneId.equals(r.phoneId())))
-                throw new ReportingProblem(409,"Reconciliation must match the configured pilot and receiving business sender.");
+            if (decision.equals("accepted") && !Objects.equals(settings.phoneId,o.phoneId()))
+                throw new ReportingProblem(409,"Reconciliation must match the configured receiving business sender.");
             if (!(Set.of("SENDING","UNCERTAIN").contains(o.state()) || (decision.equals("abandon") && o.state().equals("PENDING"))))
                 throw new ReportingProblem(409,"Only pending abandonment or interrupted/uncertain reconciliation is allowed.");
             Outbound updated=o.result(decision.equals("accepted") ? "ACCEPTED" : "CANCELLED",
                     decision.equals("accepted") ? metaId : null,decision.equals("accepted") ? delivery(metaId) : null);
             store.saveOutbound(updated);
-            if (updated.state().equals("ACCEPTED")) replayDeferred(updated.requestId());
-            else for (Inbox i:store.inboxFor(updated.requestId())) {
+            if (updated.state().equals("ACCEPTED") && updated.requestId()!=null) replayDeferred(updated.requestId());
+            else if(updated.requestId()!=null) for (Inbox i:store.inboxFor(updated.requestId())) {
                 ReportingFlow.Action a=ReportingFlow.action(i.action());
                 if (i.disposition().equals("DEFERRED") && a!=null && a.revision()==updated.revision()) store.saveInbox(i.disposition("IGNORED"));
             }
@@ -329,15 +376,15 @@ public class ReportingService {
         });
     }
     private void replayDeferred(String requestId) {
-        Worker worker=store.lockWorker(settings.workerId);
+        Long owner=store.requestWorkerId(requestId);
+        Worker worker=owner==null ? null : store.lockWorker(owner);
         for (Inbox i:store.inboxFor(requestId)) {
             if (!i.disposition().equals("DEFERRED")) continue;
             Request r=store.request(requestId);
             ReportingFlow.Action a=ReportingFlow.action(i.action());
             String disposition="IGNORED";
             if (a!=null && r!=null && r.submittedAt()==null && r.revision()==a.revision() && i.messageAt()!=null
-                    && pilotMatches(worker) && r.workerId()==settings.workerId && settings.recipient.equals(r.recipient())
-                    && settings.phoneId.equals(r.phoneId())) {
+                    && matchesRequest(worker,r)) {
                 Outbound prompt=store.outboundFor(requestId).stream().filter(o -> o.revision()==r.revision()).findFirst().orElse(null);
                 if (prompt!=null && "ACCEPTED".equals(prompt.state()) && Objects.equals(prompt.metaId(),i.contextId())) {
                     if (i.kind().equals("TEXT") && r.step().equals("OTHER_TEXT") && i.acceptedText()!=null) {
@@ -348,16 +395,16 @@ public class ReportingService {
             store.saveInbox(i.disposition(disposition));
         }
     }
-    private void lockPilotIfConfigured() { if (settings.workerId!=null) store.lockWorker(settings.workerId); }
-    private void requireSending() { if (!settings.sendingReady()) throw new ReportingProblem(503,"Reporting sending is disabled or pilot/sender/template configuration is incomplete."); }
-    private boolean pilotMatches(Worker w) {
-        return w!=null && w.eligible() && w.id()==settings.workerId && settings.recipient.equals(w.number());
+    private void requireSending() { if (!settings.sendingReady()) throw new ReportingProblem(503,"Reporting worker sending is paused or sender/template/rollout setup is incomplete."); }
+    private boolean workerAllowed(Worker w) {
+        return settings.allowsWorker(w);
     }
-    private void requirePilot(Worker w) { if (!pilotMatches(w)) throw new ReportingProblem(409,"Explicit pilot eligibility and normalized number must match the configured worker and recipient."); }
+    private void requireWorker(Worker w) { if (!workerAllowed(w)) throw new ReportingProblem(409,"Explicit worker participation, normalized number and reviewed rollout scope are required."); }
     private void requireActivity(long worker,LocalDate date) {
         if(!store.activeWorker(worker,date)) throw new ReportingProblem(409,"Opening reports require a saved assignment between workDate minus six days and workDate, inclusive.");
     }
-    private static OutboundView outboundView(Outbound o) { return new OutboundView(o.id(),o.revision(),o.kind(),o.state(),o.metaId(),o.delivery()); }
+    static OutboundView outboundView(Outbound o) { return new OutboundView(o.id(),o.revision(),o.kind(),o.state(),o.metaId(),o.delivery(),o.failureCode(),o.recipientIdentity()); }
+    private boolean matchesRequest(Worker w,Request r) {return r!=null && settings.allowsWorker(w) && r.workerId()==w.id() && Objects.equals(w.number(),r.recipient()) && Objects.equals(settings.phoneId,r.phoneId());}
     private static Iterable<JsonNode> array(JsonNode node) { return node.isArray() ? node : List.of(); }
     private static String actionValue(JsonNode m) {
         String type=m.path("type").asText();

@@ -147,6 +147,7 @@ class ReportingMySqlIntegrationTest {
         try(Connection c=dataSource.getConnection()) {
             ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/001-whatsapp-reporting.sql"));
             ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/002-whatsapp-reporting-other-and-nicknames.sql"));
+            ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/003-whatsapp-daily-runs.sql"));
         }
     }
     private void configured() throws Exception {
@@ -381,7 +382,7 @@ class ReportingMySqlIntegrationTest {
     }
     @Test void statusesCanPrecedeAcceptanceAreDeduplicatedAndDoNotRegressRead() throws Exception {
         configured();String id=initiate();JsonNode status=mapperRead("{\"metadata\":{\"phone_number_id\":\"123400007\"},\"statuses\":[{\"id\":\"wamid.mysqlMock1\",\"recipient_id\":\"970599000007\",\"status\":\"read\",\"timestamp\":\"1792680000\"},{\"id\":\"wamid.mysqlMock1\",\"recipient_id\":\"970599000007\",\"status\":\"sent\",\"timestamp\":\"1792680001\"}]}");
-        service.acceptVerifiedValue(status);dispatch(id);service.acceptVerifiedValue(status);assertEquals("READ",current(id).delivery());assertEquals(2,count("whatsapp_report_inbox"));
+        transport=p -> {service.acceptVerifiedValue(status);sends.incrementAndGet();return new ReportingSender.Result("ACCEPTED","wamid.mysqlMock1");};dispatch(id);service.acceptVerifiedValue(status);assertEquals("READ",current(id).delivery());assertEquals(2,count("whatsapp_report_inbox"));
     }
     @Test void invalidSignaturesCannotReachDatabaseAndWrongBusinessSenderContextOrActionCannotAdvance() throws Exception {
         configured();String id=initiate();dispatch(id);String action=token(id,"start",0),context=current(id).metaId();
@@ -407,8 +408,8 @@ class ReportingMySqlIntegrationTest {
     @Test void pilotGatesAndRequestOverridesCannotSendToOtherWorkersOrBusinessNumbers() throws Exception {
         configured();MockMvc mvc=adminMvc();
         mvc.perform(post(BASE+"/requests").header(ADMIN,env.get("WHATSAPP_REPORTING_ADMIN_SECRET")).contentType("application/json").content("{\"workDate\":\"2026-10-22\",\"recipient\":\"972599000008\"}")).andExpect(status().isBadRequest());assertEquals(0,count("whatsapp_report_requests"));
-        String id=initiate();service.configureWorker(7,true,"972599000007");assertThrows(ReportingProblem.class,() -> dispatch(id));assertEquals(0,sends.get());
-        service.configureWorker(7,true,"970599000007");env.put("WHATSAPP_REPORTING_PHONE_NUMBER_ID","999900009");recreateServices();assertThrows(ReportingProblem.class,() -> dispatch(id));assertEquals(0,sends.get());
+        String id=initiate();service.configureWorker(7,true,"972599000007");dispatch(id);assertEquals("CANCELLED",current(id).state());assertEquals(0,sends.get());
+        service.configureWorker(7,true,"970599000007");env.put("WHATSAPP_REPORTING_PHONE_NUMBER_ID","999900009");recreateServices();dispatch(id);assertEquals("CANCELLED",current(id).state());assertEquals(0,sends.get());
         env.remove("WHATSAPP_REPORTING_PHONE_NUMBER_ID");recreateServices();assertThrows(ReportingProblem.class,() -> dispatch(id));assertEquals(0,sends.get());
     }
     @Test void disabledReportingWithAbsentTablesPreservesRealLegacyReadsAndMockedConnectivity() throws Exception {
@@ -444,7 +445,7 @@ class ReportingMySqlIntegrationTest {
         String submitted=UUID.randomUUID().toString();
         jdbc.update("INSERT INTO whatsapp_report_requests(id,worker_id,recipient,phone_id,work_date,step,revision,outcome,created_at,submitted_at) VALUES(?,8,'972599000008','123400007',?,'SUBMITTED',5,'WORKED',?,?)",submitted,DAY,java.sql.Timestamp.from(clock.instant()),java.sql.Timestamp.from(clock.instant()));
         jdbc.update("INSERT INTO whatsapp_report_sites VALUES(?,12,'Submitted snapshot')",submitted);jdbc.update("INSERT INTO whatsapp_report_coworkers VALUES(?,12,7,'Submitted mention')",submitted);
-        try(Connection c=dataSource.getConnection()){ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/002-whatsapp-reporting-other-and-nicknames.sql"));}
+        try(Connection c=dataSource.getConnection()){ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/002-whatsapp-reporting-other-and-nicknames.sql"));ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/003-whatsapp-daily-runs.sql"));}
         service.configureWorker(7,true,"970599000007");service.configureWorker(8,true,"972599000008");
         assertEquals("SUBMITTED",service.report(submitted).step());assertEquals("Submitted snapshot",service.report(submitted).sites().getFirst().label());assertEquals(12,service.report(submitted).coworkers().getFirst().entryId());
         assertEquals(payload,current(id).payload());assertEquals(11,service.report(id).sites().getFirst().entryId());assertEquals(11,service.report(id).coworkers().getFirst().entryId());assertEquals("Original snapshot",service.report(id).sites().getFirst().label());
@@ -526,6 +527,80 @@ class ReportingMySqlIntegrationTest {
         mvc.perform(post(path).header(ADMIN,env.get("WHATSAPP_REPORTING_ADMIN_SECRET")).contentType("application/json").content("{\"masterWorksiteId\":13}")).andExpect(status().isOk()).andExpect(jsonPath("$.originalDescription").value("قرب المدرسة القديمة"));
     }
 
+    private DailyReportingService dailyService() {return new DailyReportingService(store,service,new ReportingSettings(env::get),clock,mapper);}
+    private void enableDaily() {
+        env.putAll(DailyReportingTest.dailyEnvironment());clock.now=DailyReportingService.opening(DAY);
+        recreateServices();transport=payload -> {
+            assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+            return new ReportingSender.Result("ACCEPTED","wamid.mysqlDaily"+sends.incrementAndGet());
+        };
+    }
+    private void drainDaily() {for(int i=0;i<20 && !store.pendingIds(1).isEmpty();i++)service.drainOne();}
+    private DailyRun dailyRun() {return store.runByDate(DAY,"123400007");}
+    private void actWorker(long worker,String id,String verb) {
+        dispatch(id);Outbound o=current(id);ObjectNode v=(ObjectNode)value("wamid.multi"+UUID.randomUUID(),token(id,verb,0),o.metaId(),o.kind().equals("TEMPLATE") ? "button" : "list_reply");
+        ((ObjectNode)v.path("messages").get(0)).put("from",worker==7 ? "970599000007" : "972599000008");service.acceptVerifiedValue(v);
+    }
+    private JsonNode workerText(long worker,String mid,String body,String context) {ObjectNode v=(ObjectNode)text(mid,body,context);((ObjectNode)v.path("messages").get(0)).put("from",worker==7 ? "970599000007" : "972599000008");return v;}
+    @Test void thirdMigrationPreservesTwoSchemaReportsPayloadsAndAddsRoutingSnapshotsWithoutOptingIn() throws Exception {
+        try(Connection c=dataSource.getConnection()) {ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/001-whatsapp-reporting.sql"));ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/002-whatsapp-reporting-other-and-nicknames.sql"));}
+        String id=UUID.randomUUID().toString(),out=UUID.randomUUID().toString();String payload="{\"synthetic\":\"preserve exact issued payload\"}";
+        jdbc.update("INSERT INTO whatsapp_report_requests(id,worker_id,recipient,phone_id,work_date,step,created_at) VALUES(?,7,'970599000007','123400007',?,'START',?)",id,DAY,java.sql.Timestamp.from(clock.instant()));
+        jdbc.update("INSERT INTO whatsapp_report_outbound(id,request_id,revision,kind,payload,state,meta_id,created_at) VALUES(?,?,0,'TEMPLATE',?,'ACCEPTED','wamid.preserveThird',?)",out,id,payload,java.sql.Timestamp.from(clock.instant()));
+        try(Connection c=dataSource.getConnection()) {ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/003-whatsapp-daily-runs.sql"));}
+        Outbound migrated=store.peekOutbound(out);assertEquals(payload,migrated.payload());assertEquals("970599000007",migrated.recipient());assertEquals("123400007",migrated.phoneId());assertEquals("WORKER",migrated.recipientType());assertEquals("wamid.preserveThird",migrated.metaId());assertNull(migrated.runId());
+        assertEquals(0,count("whatsapp_daily_runs"));assertEquals(0,count("whatsapp_daily_members"));assertFalse(store.transaction(() -> store.lockWorker(7)).eligible());
+    }
+    @Test void concurrentDailyTriggersCreateOneRunWorkerDatesAndIdenticalManagementSnapshot() throws Exception {
+        configured();enableDaily();List<Runnable> jobs=new ArrayList<>();for(int i=0;i<6;i++)jobs.add(() -> dailyService().trigger(DAY));
+        var errors=race(jobs);assertTrue(errors.isEmpty(),() -> "Synthetic trigger errors: "+errors);assertEquals(1,count("whatsapp_daily_runs"));assertEquals(2,count("whatsapp_report_requests"));assertEquals(2,count("whatsapp_report_outbound"));assertEquals(0,sends.get());
+        drainDaily();dailyService().tick();assertEquals("SNAPSHOT",dailyRun().phase());var management=store.managementOutbound(dailyRun().id());assertEquals(2,management.size());assertEquals(mapperRead(management.get(0).payload()).path("template"),mapperRead(management.get(1).payload()).path("template"));
+        String snapshot=dailyRun().summaryText();recreateServices();dailyService().tick();assertEquals(snapshot,dailyRun().summaryText());assertEquals(4,count("whatsapp_report_outbound"));
+        assertThrows(DuplicateKeyException.class,() -> store.transaction(() -> {Outbound m=management.getFirst();store.insertOutbound(new Outbound(UUID.randomUUID().toString(),null,0,m.kind(),m.payload(),"PENDING",null,null,clock.instant(),m.recipientType(),m.recipientIdentity(),m.recipient(),m.phoneId(),m.runId(),null));return null;}));
+    }
+    @Test void dailySummaryAndTwoIntentsRollbackTogetherThenRecoverOnce() throws Exception {
+        configured();enableDaily();dailyService().trigger(DAY);drainDaily();store.failAt.set("MANAGEMENT_INTENT");
+        assertThrows(DataAccessException.class,() -> dailyService().tick());assertNull(dailyRun().summaryText());assertTrue(store.managementOutbound(dailyRun().id()).isEmpty());
+        dailyService().tick();assertEquals(2,store.managementOutbound(dailyRun().id()).size());assertNotNull(dailyRun().summaryParameters());
+    }
+    @Test void dailyPreparationFailureRollsBackWorkersAndProducesAnExplicitIncompleteSummary() throws Exception {
+        configured();enableDaily();store.failAt.set("RUN_MEMBER");dailyService().trigger(DAY);
+        assertEquals(0,count("whatsapp_report_requests"));assertEquals(0,count("whatsapp_daily_members"));assertEquals("PREPARATION_FAILED",dailyRun().failureCode());assertTrue(dailyRun().summaryText().contains("غير مكتملة"));assertTrue(dailyRun().summaryText().contains("غير متاح"));assertEquals(2,store.managementOutbound(dailyRun().id()).size());assertEquals(0,sends.get());
+    }
+    @Test void managementIndependentOfWorkersAndNoQuestionnaireWhenItsNumberMatchesAWorker() throws Exception {
+        configured();enableDaily();service.configureWorker(7,true,"+970599000099");service.configureWorker(8,false,null);env.remove("WHATSAPP_REPORTING_PILOT_WORKER_ID");env.remove("WHATSAPP_REPORTING_PILOT_RECIPIENT");recreateServices();dailyService().trigger(DAY);
+        assertEquals(0,count("whatsapp_report_requests"));assertTrue(store.runMembers(dailyRun().id()).stream().anyMatch(m -> "MANAGEMENT_RECIPIENT".equals(m.exclusionCode())));assertTrue(dailyRun().summaryText().contains("لم تتم مراسلة أي عامل"));drainDaily();assertEquals(2,sends.get());
+    }
+    @Test void multipleWorkersOtherRepliesAndContextlessTextRemainIsolatedAcrossMidnight() throws Exception {
+        configured();enableDaily();dailyService().trigger(DAY);String a=store.transaction(() -> store.request(7,DAY)).id(),b=store.transaction(() -> store.request(8,DAY)).id();
+        actWorker(7,a,"start");actWorker(8,b,"start");actWorker(7,a,"other");actWorker(8,b,"other");dispatch(a);dispatch(b);
+        service.acceptVerifiedValue(workerText(7,"wamid.badCrossWorker","وصف خاطئ",current(b).metaId()));assertTrue(store.sites(a).isEmpty());assertTrue(store.sites(b).isEmpty());
+        factory.destroy();bootstrapOrm();recreateServices();clock.now=clock.now.plus(Duration.ofHours(6));
+        service.acceptVerifiedValue(workerText(7,"wamid.workerAOther","وصف العامل الأول",null));service.acceptVerifiedValue(workerText(8,"wamid.workerBOther","وصف العامل الثاني",null));assertEquals("وصف العامل الأول",store.sites(a).getFirst().originalDescription());assertEquals("وصف العامل الثاني",store.sites(b).getFirst().originalDescription());assertEquals(DAY,service.report(b).workDate());
+    }
+    @Test void nonPilotWorkerDeferredReplyUsesItsOwnPersistedContext() throws Exception {
+        configured();enableDaily();dailyService().trigger(DAY);String id=store.transaction(() -> store.request(8,DAY)).id();String action=token(id,"start",0);
+        transport=payload -> {ObjectNode v=(ObjectNode)value("wamid.nonPilotDeferred",action,"wamid.nonPilotAccepted","button");((ObjectNode)v.path("messages").get(0)).put("from","972599000008");service.acceptVerifiedValue(v);assertEquals("START",service.report(id).step());return new ReportingSender.Result("ACCEPTED","wamid.nonPilotAccepted");};
+        dispatch(id);assertEquals("SITES",service.report(id).step());assertEquals("APPLIED",service.report(id).inbox().getFirst().disposition());assertEquals("START",service.report(store.transaction(() -> store.request(7,DAY)).id()).step());
+    }
+    @Test void interruptedManagementAcceptanceNeverResendsAndDoesNotSuppressTheOtherRecipient() throws Exception {
+        configured();enableDaily();dailyService().trigger(DAY);drainDaily();dailyService().tick();store.abortAccepted.set(true);
+        assertThrows(RuntimeException.class,() -> service.drainOne());assertEquals(3,sends.get());Outbound interrupted=store.managementOutbound(dailyRun().id()).stream().filter(o -> o.state().equals("SENDING")).findFirst().orElseThrow();
+        recreateServices();drainDaily();assertEquals(4,sends.get());assertEquals("SENDING",store.peekOutbound(interrupted.id()).state());
+        service.resolve(interrupted.id(),"accepted","wamid.mysqlDaily3");assertEquals(4,sends.get());assertEquals("ACCEPTED",store.peekOutbound(interrupted.id()).state());
+    }
+    @Test void managementStatusesAreBoundToActualRecipientAndDoNotChangeWorkerReportsOrSnapshot() throws Exception {
+        configured();enableDaily();dailyService().trigger(DAY);drainDaily();dailyService().tick();drainDaily();Outbound m=store.managementOutbound(dailyRun().id()).getFirst();String snapshot=dailyRun().summaryText();
+        ObjectNode v=mapper.createObjectNode();v.putObject("metadata").put("phone_number_id","123400007");ObjectNode status=v.putArray("statuses").addObject();status.put("id",m.metaId()).put("recipient_id","970599000007").put("status","read").put("timestamp",Long.toString(clock.instant().getEpochSecond()));service.acceptVerifiedValue(v);assertNull(store.peekOutbound(m.id()).delivery());
+        status.put("recipient_id",m.recipient());service.acceptVerifiedValue(v);service.acceptVerifiedValue(v);assertEquals("READ",store.peekOutbound(m.id()).delivery());assertEquals(1,count("whatsapp_report_inbox"));assertEquals(snapshot,dailyRun().summaryText());assertTrue(jdbc.queryForList("SELECT step FROM whatsapp_report_requests",String.class).stream().allMatch("START"::equals));
+        ObjectNode reply=(ObjectNode)value("wamid.managementReply","wr:"+store.transaction(() -> store.request(7,DAY)).id()+":0:start:0:0",m.metaId(),"button");((ObjectNode)reply.path("messages").get(0)).put("from",m.recipient());service.acceptVerifiedValue(reply);assertEquals(1,count("whatsapp_report_inbox"));
+    }
+    @Test void dailyCutoffPendingCountsAndBlockedQueueEntriesAreVisibleAndDoNotStarve() throws Exception {
+        configured();enableDaily();dailyService().trigger(DAY);service.configureWorker(7,false,null);drainDaily();assertEquals(1,sends.get());
+        Outbound blocked=store.outboundFor(store.transaction(() -> store.request(7,DAY)).id()).getFirst();assertEquals("WORKER_SETUP_CHANGED",blocked.failureCode());dailyService().tick();assertTrue(dailyRun().summaryText().contains("نتائج جزئية"));
+        transport=p -> new ReportingSender.Result("REJECTED",null);service.drainOne();transport=p -> new ReportingSender.Result("ACCEPTED","wamid.independentManagement");service.drainOne();assertEquals(Set.of("ACCEPTED","REJECTED"),new HashSet<>(store.managementOutbound(dailyRun().id()).stream().map(Outbound::state).toList()));
+    }
+
     private class FaultStore extends JdbcReportingStore {
         final AtomicReference<String> failAt=new AtomicReference<>();final AtomicBoolean abortAccepted=new AtomicBoolean();
         final AtomicInteger transactions=new AtomicInteger(),pendingQueries=new AtomicInteger();
@@ -533,6 +608,8 @@ class ReportingMySqlIntegrationTest {
         @Override public <T>T transaction(Supplier<T> action){transactions.incrementAndGet();return super.transaction(action);}
         @Override public List<String> pendingIds(int limit){pendingQueries.incrementAndGet();return super.pendingIds(limit);}
         @Override public void insertInbox(Inbox i){super.insertInbox(i);fail("INBOX");}
+        @Override public void addRunMember(DailyMember m){super.addRunMember(m);fail("RUN_MEMBER");}
+        @Override public void insertOutbound(Outbound o){super.insertOutbound(o);if(o.recipientType().equals("MANAGEMENT"))fail("MANAGEMENT_INTENT");}
         @Override public void resolveSite(String request,long entry,long master,String key,Instant at){super.resolveSite(request,entry,master,key,at);fail("RESOLUTION");}
         @Override public void saveOutbound(Outbound o){
             super.saveOutbound(o);fail(o.state());

@@ -18,11 +18,14 @@ public final class MemoryReportingStore implements ReportingStore {
     Map<String,Coworker> mentions=new LinkedHashMap<>();
     Map<String,Inbox> inbox=new LinkedHashMap<>();
     Map<String,Outbound> outbound=new LinkedHashMap<>();
+    Map<String,DailyRun> runs=new LinkedHashMap<>();
+    Map<String,DailyMember> members=new LinkedHashMap<>();
     boolean failCommit;
     int transactions;
     @Override public synchronized <T> T transaction(Supplier<T> action) {
         var r=new LinkedHashMap<>(requests); var s=new LinkedHashMap<>(sites); var c=new LinkedHashMap<>(mentions);
         var i=new LinkedHashMap<>(inbox); var o=new LinkedHashMap<>(outbound);
+        var rs=new LinkedHashMap<>(runs);var ms=new LinkedHashMap<>(members);
         var w=new LinkedHashMap<>(workers); var selection=new HashSet<>(selectable);
         transactions++;
         try {
@@ -30,12 +33,14 @@ public final class MemoryReportingStore implements ReportingStore {
             if (failCommit) { failCommit=false; throw new IllegalStateException("simulated commit interruption"); }
             return result;
         } catch (RuntimeException | Error e) {
-            requests=r; sites=s; mentions=c; inbox=i; outbound=o;
+            runs=rs;members=ms;requests=r; sites=s; mentions=c; inbox=i; outbound=o;
             workers.clear();workers.putAll(w);selectable.clear();selectable.addAll(selection);
             throw e;
         }
     }
     @Override public Worker lockWorker(long id) { return workers.get(id); }
+    @Override public synchronized Worker inboundWorker(String number,String phone) {return workers.values().stream().filter(w -> Objects.equals(number,w.number()) && requests.values().stream().anyMatch(r -> r.workerId()==w.id() && r.recipient().equals(number) && r.phoneId().equals(phone))).findFirst().orElse(null);}
+    @Override public List<Worker> activeWorkers(LocalDate date) {return workers.values().stream().filter(w -> activeWorker(w.id(),date)).toList();}
     @Override public void configureWorker(long id,boolean eligible,String number) {
         if (number!=null && workers.values().stream().anyMatch(w -> w.id()!=id && number.equals(w.number())))
             throw new org.springframework.dao.DuplicateKeyException("synthetic duplicate");
@@ -69,8 +74,29 @@ public final class MemoryReportingStore implements ReportingStore {
     @Override public List<String> observedStatuses(String id) { return inbox.values().stream().filter(i -> i.messageId().equals(id) && i.kind().startsWith("STATUS_")).map(Inbox::kind).toList(); }
     @Override public Outbound outbound(String id) { return outbound.get(id); }
     @Override public Outbound byMetaId(String id) { return outbound.values().stream().filter(o -> id.equals(o.metaId())).findFirst().orElse(null); }
-    @Override public List<Outbound> outboundFor(String id) { return outbound.values().stream().filter(o -> o.requestId().equals(id)).toList(); }
-    @Override public void insertOutbound(Outbound o) { if(outbound.values().stream().anyMatch(x -> x.requestId().equals(o.requestId()) && x.revision()==o.revision())) throw new AssertionError("duplicate revision"); outbound.put(o.id(),o); }
+    @Override public List<Outbound> outboundFor(String id) { return outbound.values().stream().filter(o -> Objects.equals(o.requestId(),id)).toList(); }
+    @Override public void insertOutbound(Outbound original) {
+        Request r=original.requestId()==null ? null : request(original.requestId());
+        Outbound o=original.recipient()!=null ? original : original.routed(r.recipient(),r.phoneId(),original.runId());
+        if(outbound.values().stream().anyMatch(x -> o.requestId()!=null && Objects.equals(x.requestId(),o.requestId()) && x.revision()==o.revision())) throw new AssertionError("duplicate revision");
+        if(outbound.values().stream().anyMatch(x -> o.runId()!=null && Objects.equals(x.runId(),o.runId()) && Objects.equals(x.recipientType(),o.recipientType()) && Objects.equals(x.recipient(),o.recipient()))) throw new AssertionError("duplicate daily recipient");
+        outbound.put(o.id(),o);
+    }
     @Override public void saveOutbound(Outbound o) { outbound.put(o.id(),o); }
-    @Override public List<String> pendingIds(int limit) { return outbound.values().stream().filter(o -> o.state().equals("PENDING")).limit(limit).map(Outbound::id).toList(); }
+    @Override public List<String> pendingIds(int limit) { return outbound.values().stream().filter(o -> o.state().equals("PENDING")).sorted(Comparator.comparingInt(o -> o.recipientType().equals("MANAGEMENT") ? 0 : o.kind().equals("TEMPLATE") ? 1 : 2)).limit(limit).map(Outbound::id).toList(); }
+    @Override public synchronized Outbound peekOutbound(String id) {return outbound(id);}
+    @Override public synchronized Outbound peekByMetaId(String id) {return byMetaId(id);}
+    @Override public synchronized List<Outbound> unboundOutbounds(String recipient,String phone) {return outbound.values().stream().filter(o -> Objects.equals(o.recipient(),recipient) && Objects.equals(o.phoneId(),phone) && o.metaId()==null && Set.of("SENDING","UNCERTAIN").contains(o.state())).toList();}
+    @Override public DailyRun ensureRun(LocalDate date,String phone,java.time.Instant now,java.time.Instant cutoff,java.time.Instant expires,String owner,String father,String language) {
+        DailyRun r=runByDate(date,phone);if(r!=null)return r;
+        r=new DailyRun(UUID.randomUUID().toString(),phone,date,"NEW",now,cutoff,expires,owner,father,language,null,null,null);runs.put(r.id(),r);return r;
+    }
+    @Override public synchronized DailyRun runByDate(LocalDate date,String phone) {return runs.values().stream().filter(r -> r.workDate().equals(date) && Objects.equals(r.phoneId(),phone)).findFirst().orElse(null);}
+    @Override public DailyRun lockRun(String id) {return runs.get(id);}
+    @Override public void saveRun(DailyRun r) {if(runs.get(r.id()).summaryParameters()==null)runs.put(r.id(),r);}
+    @Override public void addRunMember(DailyMember member) {if(members.putIfAbsent(member.runId()+":"+member.workerId(),member)!=null)throw new AssertionError("duplicate run member");}
+    @Override public List<DailyMember> runMembers(String id) {return members.values().stream().filter(m -> m.runId().equals(id)).toList();}
+    @Override public void linkOpeningRun(String id,String run) {for(Outbound o:outboundFor(id))if(o.kind().equals("TEMPLATE") && o.runId()==null)outbound.put(o.id(),o.routed(o.recipient(),o.phoneId(),run));}
+    @Override public synchronized List<Outbound> managementOutbound(String id) {return outbound.values().stream().filter(o -> Objects.equals(o.runId(),id) && o.recipientType().equals("MANAGEMENT")).toList();}
+
 }

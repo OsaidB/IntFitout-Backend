@@ -55,6 +55,17 @@ class MetaReportingSenderTest {
         env.remove("WHATSAPP_REPORTING_SEND_ENABLED");build();assertEquals("REJECTED",sender.send(payload).state());assertEquals(0,http.calls);
         env.put("WHATSAPP_REPORTING_SEND_ENABLED","true");build();assertEquals("REJECTED",sender.send(payload.replace("970599000007","972599000007")).state());assertEquals(0,http.calls);
     }
+    @Test void managementAndAdditionalWorkersUseSameTransportOnlyWithExplicitRoutingAndGates() {
+        env.putAll(DailyReportingTest.dailyEnvironment());build();
+        String management="{\"messaging_product\":\"whatsapp\",\"to\":\"970599000099\",\"type\":\"template\",\"template\":{\"name\":\"daily_worker_dispatch_summary_ar\",\"language\":{\"code\":\"ar\"}}}";
+        var o=new ReportingModel.Outbound("id",null,0,"MGMT_SUMMARY",management,"SENDING",null,null,Instant.EPOCH,"MANAGEMENT","OWNER","970599000099","123400007","run",null);
+        assertEquals("ACCEPTED",sender.send(o).state());assertEquals(1,http.calls);assertTrue(http.bounded);
+        env.put("WHATSAPP_REPORTING_MANAGEMENT_TEMPLATE_CONFIRMED","false");build();assertEquals("REJECTED",sender.send(o).state());assertEquals(1,http.calls);
+        env.put("WHATSAPP_REPORTING_MANAGEMENT_TEMPLATE_CONFIRMED","true");build();assertEquals("REJECTED",sender.send(o.routed("970599000098","123400007","run")).state());
+        assertEquals("REJECTED",sender.send(o.routed("970599000099","999900009","run")).state());assertEquals(1,http.calls);
+        String worker=payload.replace("970599000007","972599000008");var w=new ReportingModel.Outbound("worker","request",0,"TEMPLATE",worker,"SENDING",null,null,Instant.EPOCH).routed("972599000008","123400007",null);
+        assertEquals("ACCEPTED",sender.send(w).state());env.put("WHATSAPP_REPORTING_ROLLOUT_ENABLED","false");build();assertEquals("REJECTED",sender.send(w).state());assertEquals(2,http.calls);
+    }
     static final class StubHttp extends CloseableHttpClient {
         int calls,code=200;String uri,body,authorization;
         String response="{\"messaging_product\":\"whatsapp\",\"messages\":[{\"id\":\"wamid.mockAccepted\"}]}";
