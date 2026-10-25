@@ -17,11 +17,18 @@ public final class ReportingModel {
                     result, createdAt, inbound, submit ? inbound : null);
         }
     }
-    public record Site(String requestId, long siteId, String label) { }
-    public record Coworker(String requestId, long siteId, long workerId, String label) { }
+    /** entryId is per request, independent of the nullable original master siteId. */
+    public record Site(String requestId, long entryId, Long siteId, String label, String originalDescription,
+                       Long resolvedMasterId, String businessName, String resolutionKey, Instant resolvedAt) {
+        public Site(String requestId,long siteId,String label) { this(requestId,siteId,siteId,label,null,null,null,null,null); }
+    }
+    public record Coworker(String requestId, long entryId, long workerId, String label) { }
     public record Inbox(String key, String messageId, String contextId, String kind, String action,
-                        String requestId, String disposition, Instant receivedAt, Instant messageAt) {
-        public Inbox disposition(String next) { return new Inbox(key,messageId,contextId,kind,action,requestId,next,receivedAt,messageAt); }
+                        String requestId, String disposition, Instant receivedAt, Instant messageAt, String acceptedText) {
+        public Inbox(String key,String messageId,String contextId,String kind,String action,String requestId,String disposition,Instant receivedAt,Instant messageAt) {
+            this(key,messageId,contextId,kind,action,requestId,disposition,receivedAt,messageAt,null);
+        }
+        public Inbox disposition(String next) { return new Inbox(key,messageId,contextId,kind,action,requestId,next,receivedAt,messageAt,acceptedText); }
     }
     public record Outbound(String id, String requestId, long revision, String kind, String payload,
                            String state, String metaId, String delivery, Instant createdAt) {

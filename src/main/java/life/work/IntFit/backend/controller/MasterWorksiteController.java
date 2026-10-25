@@ -45,8 +45,8 @@ public class MasterWorksiteController {
             return ResponseEntity.badRequest().body("Approved name is required.");
         }
 
-        MasterWorksiteDTO saved = service.add(dto);
-        return ResponseEntity.ok(saved);
+        try { return ResponseEntity.ok(service.add(dto)); }
+        catch (IllegalArgumentException ex) { return ResponseEntity.badRequest().body(ex.getMessage()); }
     }
 
     @PutMapping("/{id}")
@@ -74,6 +74,14 @@ public class MasterWorksiteController {
     }
 
     // 👇 NEW: update notes
+    @PutMapping("/{id}/nickname")
+    public ResponseEntity<?> nickname(@PathVariable Long id,@RequestBody Map<String,String> body) {
+        if(body==null || !body.keySet().equals(java.util.Set.of("nickname")) || body.get("nickname")==null)
+            return ResponseEntity.badRequest().body("Provide nickname as a string; use an empty string to clear it.");
+        try { return ResponseEntity.ok(service.updateNickname(id,body.get("nickname"))); }
+        catch(IllegalArgumentException e) { return ResponseEntity.badRequest().body(e.getMessage()); }
+    }
+
     @PutMapping("/{id}/notes")
     public ResponseEntity<MasterWorksiteDTO> updateNotes(
             @PathVariable Long id,

@@ -10,6 +10,15 @@ import life.work.IntFit.backend.controller.WhatsAppWebhookController;
 import life.work.IntFit.backend.dto.TeamMemberDTO;
 import life.work.IntFit.backend.mapper.TeamMemberMapper;
 import life.work.IntFit.backend.model.entity.TeamMember;
+import life.work.IntFit.backend.model.entity.MasterWorksite;
+import life.work.IntFit.backend.model.entity.Worksite;
+import life.work.IntFit.backend.model.entity.WorksiteContact;
+import life.work.IntFit.backend.model.entity.Contact;
+import life.work.IntFit.backend.dto.MasterWorksiteDTO;
+import life.work.IntFit.backend.mapper.MasterWorksiteMapper;
+import life.work.IntFit.backend.repository.*;
+import life.work.IntFit.backend.service.MasterWorksiteService;
+import org.mapstruct.factory.Mappers;
 import life.work.IntFit.backend.repository.TeamMemberRepository;
 import life.work.IntFit.backend.service.TeamMemberService;
 import life.work.IntFit.backend.service.WhatsAppTestSendService;
@@ -109,7 +118,7 @@ class ReportingMySqlIntegrationTest {
         // One actual legacy entity, explicit datasource, schema generation off. No component scanning.
         factory=new LocalContainerEntityManagerFactoryBean();factory.setDataSource(dataSource);
         factory.setPersistenceUnitName("disposable-reporting-validation");
-        factory.setManagedTypes(PersistenceManagedTypes.of(TeamMember.class.getName()));
+        factory.setManagedTypes(PersistenceManagedTypes.of(TeamMember.class.getName(),MasterWorksite.class.getName(),Worksite.class.getName(),WorksiteContact.class.getName(),Contact.class.getName()));
         factory.setJpaVendorAdapter(new HibernateJpaVendorAdapter());
         factory.setJpaPropertyMap(Map.of("hibernate.hbm2ddl.auto","none","hibernate.show_sql","false",
                 "hibernate.jdbc.time_zone","UTC","hibernate.physical_naming_strategy","org.hibernate.boot.model.naming.CamelCaseToUnderscoresNamingStrategy"));
@@ -135,7 +144,10 @@ class ReportingMySqlIntegrationTest {
         return result;
     }
     private void migrate() throws Exception {
-        try(Connection c=dataSource.getConnection()) { ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/001-whatsapp-reporting.sql")); }
+        try(Connection c=dataSource.getConnection()) {
+            ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/001-whatsapp-reporting.sql"));
+            ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/002-whatsapp-reporting-other-and-nicknames.sql"));
+        }
     }
     private void configured() throws Exception {
         migrate();service.configureWorker(7,true,"+970599000007");service.configureWorker(8,true,"+972599000008");
@@ -178,6 +190,21 @@ class ReportingMySqlIntegrationTest {
     }
     private MockMvc webhookMvc() throws Exception { return MockMvcBuilders.standaloneSetup(webhook()).build(); }
     private MockMvc adminMvc() { return MockMvcBuilders.standaloneSetup(new ReportingAdminController(new ReportingSettings(env::get),service)).build(); }
+    private MasterWorksiteService masterService() {
+        MasterWorksiteRepository repo=new JpaRepositoryFactory(SharedEntityManagerCreator.createSharedEntityManager(emf)).getRepository(MasterWorksiteRepository.class);
+        CityRepository cities=org.mockito.Mockito.mock(CityRepository.class);
+        var city=new life.work.IntFit.backend.model.entity.City();city.setName("fixture city");
+        org.mockito.Mockito.when(cities.findByNameIgnoreCase("fixture city")).thenReturn(Optional.of(city));
+        return new MasterWorksiteService(repo,org.mockito.Mockito.mock(WorksiteRepository.class),Mappers.getMapper(MasterWorksiteMapper.class),cities,org.mockito.Mockito.mock(AreaRepository.class));
+    }
+    private ReportingResolutionService resolutions() {return new ReportingResolutionService(store,masterService(),clock,mapper);}
+    private JsonNode text(String mid,String description,String context) {
+        ObjectNode v=(ObjectNode)value(mid,"",context,"button");ObjectNode m=(ObjectNode)v.path("messages").get(0);
+        m.put("type","text");m.remove("button");if(context==null)m.remove("context");m.putObject("text").put("body",description);return v;
+    }
+    private String capture() {String id=initiate();act(id,"start",0);act(id,"other",0);dispatch(id);return id;}
+    private void description(String id,String description) {service.acceptVerifiedValue(text("wamid.mysqlText"+UUID.randomUUID(),description,current(id).metaId()));}
+    private String submittedOther() throws Exception {configured();String id=capture();description(id,"قرب المدرسة القديمة");act(id,"cow",8);act(id,"done",0);act(id,"finish",0);act(id,"submit",0);return id;}
     private List<Throwable> race(List<Runnable> actions) throws Exception {
         CountDownLatch ready=new CountDownLatch(actions.size()),go=new CountDownLatch(1);
         try(ExecutorService pool=Executors.newFixedThreadPool(actions.size())) {
@@ -406,13 +433,107 @@ class ReportingMySqlIntegrationTest {
         } finally {testSender.close();}
     }
 
-    private final class FaultStore extends JdbcReportingStore {
+    @Test void secondMigrationPreservesLegacyInProgressAndSubmittedSelectionsAndIssuedPayloads() throws Exception {
+        try(Connection c=dataSource.getConnection()){ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/001-whatsapp-reporting.sql"));}
+        String id=UUID.randomUUID().toString(),out=UUID.randomUUID().toString();
+        jdbc.update("INSERT INTO whatsapp_report_requests(id,worker_id,recipient,phone_id,work_date,step,revision,current_site,outcome,created_at) VALUES(?,7,'970599000007','123400007',?,'COWORKERS',2,11,'WORKED',?)",id,DAY,java.sql.Timestamp.from(clock.instant()));
+        jdbc.update("INSERT INTO whatsapp_report_sites VALUES(?,11,'Original snapshot')",id);jdbc.update("INSERT INTO whatsapp_report_coworkers VALUES(?,11,8,'Original coworker')",id);
+        Request before=store.transaction(() -> store.request(id));String payload=new ReportingFlow(mapper).prompt(before,List.of(new Site(id,11,"Original snapshot")),List.of(),List.of(),List.of(new Choice(8,"coworker")),0);
+        jdbc.update("INSERT INTO whatsapp_report_outbound(id,request_id,revision,kind,payload,state,meta_id,created_at) VALUES(?,?,2,'PROMPT',?,'ACCEPTED','wamid.legacyPrompt',?)",out,id,payload,java.sql.Timestamp.from(clock.instant()));
+        jdbc.update("INSERT INTO whatsapp_report_inbox(event_key,message_id,kind,request_id,disposition,received_at) VALUES(?,'wamid.oldInbox','MESSAGE',?,'APPLIED',?)","e".repeat(64),id,java.sql.Timestamp.from(clock.instant()));
+        String submitted=UUID.randomUUID().toString();
+        jdbc.update("INSERT INTO whatsapp_report_requests(id,worker_id,recipient,phone_id,work_date,step,revision,outcome,created_at,submitted_at) VALUES(?,8,'972599000008','123400007',?,'SUBMITTED',5,'WORKED',?,?)",submitted,DAY,java.sql.Timestamp.from(clock.instant()),java.sql.Timestamp.from(clock.instant()));
+        jdbc.update("INSERT INTO whatsapp_report_sites VALUES(?,12,'Submitted snapshot')",submitted);jdbc.update("INSERT INTO whatsapp_report_coworkers VALUES(?,12,7,'Submitted mention')",submitted);
+        try(Connection c=dataSource.getConnection()){ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/002-whatsapp-reporting-other-and-nicknames.sql"));}
+        service.configureWorker(7,true,"970599000007");service.configureWorker(8,true,"972599000008");
+        assertEquals("SUBMITTED",service.report(submitted).step());assertEquals("Submitted snapshot",service.report(submitted).sites().getFirst().label());assertEquals(12,service.report(submitted).coworkers().getFirst().entryId());
+        assertEquals(payload,current(id).payload());assertEquals(11,service.report(id).sites().getFirst().entryId());assertEquals(11,service.report(id).coworkers().getFirst().entryId());assertEquals("Original snapshot",service.report(id).sites().getFirst().label());
+        service.acceptVerifiedValue(value("wamid.legacyReply",ReportingFlow.token(before,"cow",8,0),"wamid.legacyPrompt","list_reply"));
+        assertTrue(service.report(id).coworkers().isEmpty());assertEquals(3,store.transaction(() -> store.request(id)).revision());assertEquals(2,service.report(id).inbox().size());
+        act(id,"done",0);act(id,"finish",0);act(id,"submit",0);assertEquals("AWAITING_REVIEW",service.report(id).reviewStatus());
+    }
+    @Test void databaseActivityCalendarBoundariesIgnoreManualFlagsAndMissingTodayAssignments() throws Exception {
+        migrate();jdbc.update("DELETE FROM work_assignments");
+        for(LocalDate day:List.of(DAY.minusDays(7),DAY.minusDays(6),DAY,DAY.plusDays(1))) {
+            jdbc.update("DELETE FROM work_assignments");jdbc.update("INSERT INTO work_assignments(team_member_id,master_worksite_id,date) VALUES(7,11,?)",day);
+            boolean expected=!day.isBefore(DAY.minusDays(6))&&!day.isAfter(DAY);
+            assertEquals(expected,store.activeWorker(7,DAY));assertEquals(expected,!store.activeSites(DAY).isEmpty());
+        }
+        jdbc.update("DELETE FROM work_assignments");jdbc.update("INSERT INTO work_assignments(team_member_id,master_worksite_id,date) VALUES(7,11,?)",DAY.minusDays(6));financialSnapshot=financialState();
+        service.configureWorker(7,true,"970599000007");assertEquals(1,store.activeSites(DAY).size());String id=initiate();dispatch(id);assertEquals(1,sends.get());
+    }
+    @Test void databaseNicknameFallbackSnapshotAndOldClientUpdate() throws Exception {
+        configured();MasterWorksiteService masters=masterService();
+        store.transaction(() -> masters.updateNickname(11L,"  لقب عربي  "));
+        assertEquals("لقب عربي",store.activeSites(DAY).getFirst().label());String id=initiate();act(id,"start",0);String shown=ReportingFlow.siteLabel(store.activeSites(DAY).getFirst());
+        store.transaction(() -> masters.updateNickname(11L,"لقب آخر"));act(id,"site",11);assertEquals(shown,service.report(id).sites().getFirst().label());assertEquals("موقع تجريبي أول",service.report(id).sites().getFirst().businessName());
+        var old=store.transaction(() -> masters.getById(11L));old.setNickname(null);store.transaction(() -> masters.update(11L,old));
+        assertEquals("لقب آخر",store.transaction(() -> masters.getById(11L)).getNickname());
+        store.transaction(() -> masters.updateNickname(11L,""));assertEquals("موقع تجريبي أول",store.activeSites(DAY).getFirst().label());
+        assertEquals("preserve existing notes",store.transaction(() -> masters.getById(11L)).getNotes());
+    }
+    @Test void databaseOtherOnlyAndMultipleOtherCoworkersPersistAcrossOrmRecreationAndMidnight() throws Exception {
+        configured();String id=capture();description(id,"أول موقع آخر");act(id,"cow",8);act(id,"done",0);act(id,"other",0);dispatch(id);
+        factory.destroy();bootstrapOrm();recreateServices();clock.now=Instant.parse("2026-10-23T00:30:00Z");
+        description(id,"ثاني موقع آخر");act(id,"cow",8);act(id,"done",0);act(id,"finish",0);act(id,"submit",0);
+        var report=service.report(id);assertEquals(DAY,report.workDate());assertEquals(2,report.sites().size());assertTrue(report.sites().stream().allMatch(s -> s.siteId()==null));assertNotEquals(report.coworkers().get(0).entryId(),report.coworkers().get(1).entryId());assertEquals("AWAITING_REVIEW",report.reviewStatus());
+    }
+    @Test void databaseOtherRemainsAvailableWithoutKnownActiveSites() throws Exception {
+        configured();
+        // Empty choice projection is injected; all conversation writes still use actual MySQL.
+        // A valid legacy FK schema normally has at least the worker's recently assigned master.
+        ReportingStore noChoices=new FaultStore(){@Override public List<Choice> activeSites(LocalDate d){return List.of();}};
+        service=new ReportingService(noChoices,new ReportingSettings(env::get),p -> new ReportingSender.Result("ACCEPTED","wamid.emptySites"+sends.incrementAndGet()),clock,mapper);
+        String id=capture();description(id,"موقع خارج القائمة");act(id,"done",0);act(id,"finish",0);act(id,"submit",0);assertEquals(1,service.report(id).sites().size());
+    }
+    @ParameterizedTest @ValueSource(booleans={true,false}) void databaseConcurrentOtherTextRollbackAndSignedRedeliveryCommitOnce(boolean sameId) throws Exception {
+        configured();String id=capture();JsonNode event=text("wamid.otherRollback","وصف أصلي محفوظ",current(id).metaId());byte[] body=signedBody(event);MockMvc mvc=webhookMvc();
+        store.failAt.set("INBOX");mvc.perform(post("/webhooks/whatsapp").contentType("application/json").header("X-Hub-Signature-256",signature(body)).content(body)).andExpect(status().isServiceUnavailable());
+        assertEquals("OTHER_TEXT",service.report(id).step());assertTrue(service.report(id).sites().isEmpty());
+        List<Runnable> jobs=new ArrayList<>();for(int i=0;i<6;i++){JsonNode concurrent=sameId ? event : text("wamid.distinctText"+i,"وصف أصلي محفوظ",current(id).metaId());jobs.add(() -> service.acceptVerifiedValue(concurrent));}assertTrue(race(jobs).isEmpty());assertEquals(1,service.report(id).sites().size());
+        mvc.perform(post("/webhooks/whatsapp").contentType("application/json").header("X-Hub-Signature-256",signature(body)).content(body)).andExpect(status().isOk());assertEquals(1,service.report(id).sites().size());assertEquals("وصف أصلي محفوظ",service.report(id).sites().getFirst().originalDescription());
+    }
+    @Test void databaseTextContextAmbiguityAndConflictingContextNeverGuess() throws Exception {
+        configured();String first=capture();clock.now=clock.now.plus(Duration.ofDays(1));String second=service.initiate(DAY.plusDays(1)).id();act(second,"start",0);act(second,"other",0);dispatch(second);
+        service.acceptVerifiedValue(text("wamid.ambiguousText","غير واضح",null));service.acceptVerifiedValue(text("wamid.conflictText","غير واضح","wamid.unknown"));
+        assertTrue(service.report(first).sites().isEmpty());assertTrue(service.report(second).sites().isEmpty());
+        description(first,"تقرير أقدم");service.acceptVerifiedValue(text("wamid.singleCapture","تقرير أحدث",null));assertEquals(1,service.report(second).sites().size());assertEquals(DAY,service.report(first).workDate());
+    }
+    @Test void databaseUncertainTextRecoveryDoesNotResend() throws Exception {
+        configured();String id=initiate();act(id,"start",0);act(id,"other",0);transport=p -> {sends.incrementAndGet();return new ReportingSender.Result("UNCERTAIN",null);};dispatch(id);int attempts=sends.get();
+        service.acceptVerifiedValue(text("wamid.uncertainText","وصف متأخر","wamid.evidencedCapture"));assertTrue(service.report(id).sites().isEmpty());recreateServices();dispatch(id);assertEquals(attempts,sends.get());
+        env.put("WHATSAPP_REPORTING_SEND_ENABLED","false");recreateServices();service.resolve(current(id).id(),"accepted","wamid.evidencedCapture");assertEquals(1,service.report(id).sites().size());assertEquals(attempts,sends.get());
+    }
+    @Test void databaseResolutionLinksOutsideWindowAndPreservesSubmissionWithIdempotency() throws Exception {
+        String id=submittedOther();var original=service.report(id);long entry=original.sites().getFirst().entryId();ReportingResolutionService resolver=resolutions();
+        var resolved=resolver.resolve(id,entry,13L,null);assertEquals(13L,resolved.resolvedMasterId());assertEquals("Unselected fixture site",resolved.businessName());assertEquals("قرب المدرسة القديمة",resolved.originalDescription());
+        assertEquals(resolved,resolver.resolve(id,entry,13L,null));assertThrows(ReportingProblem.class,() -> resolver.resolve(id,entry,11L,null));
+        var after=service.report(id);assertEquals(original.step(),after.step());assertEquals(original.submittedAt(),after.submittedAt());assertEquals(original.reviewStatus(),after.reviewStatus());assertEquals(original.coworkers(),after.coworkers());assertEquals(original.outbound(),after.outbound());
+    }
+    @Test void databaseNewMasterCreationAndLinkAreAtomicAndConcurrentRetriesCreateOnlyOnce() throws Exception {
+        String id=submittedOther();long entry=service.report(id).sites().getFirst().entryId();int before=count("master_worksites");ReportingResolutionService resolver=resolutions();
+        MasterWorksiteDTO dto=MasterWorksiteDTO.builder().approvedName("New explicit business master").nickname("اسم جديد").notes("Operator reviewed").build();
+        store.failAt.set("RESOLUTION");assertThrows(DataAccessException.class,() -> resolver.resolve(id,entry,null,dto));assertEquals(before,count("master_worksites"));assertNull(service.report(id).sites().getFirst().resolvedMasterId());
+        List<Runnable> jobs=new ArrayList<>();for(int i=0;i<4;i++)jobs.add(() -> resolver.resolve(id,entry,null,MasterWorksiteDTO.builder().approvedName("New explicit business master").nickname("اسم جديد").notes("Operator reviewed").build()));
+        var errors=race(jobs);assertTrue(errors.isEmpty(),() -> "Synthetic concurrent resolution errors: "+errors);assertEquals(before+1,count("master_worksites"));assertNotNull(service.report(id).sites().getFirst().resolvedMasterId());
+    }
+    @Test void databaseResolutionAdminProtectionAndValidation() throws Exception {
+        String id=submittedOther();long entry=service.report(id).sites().getFirst().entryId();MockMvc mvc=MockMvcBuilders.standaloneSetup(new ReportingAdminController(new ReportingSettings(env::get),service,resolutions())).build();String path=BASE+"/requests/"+id+"/entries/"+entry+"/resolve";
+        mvc.perform(post(path).contentType("application/json").content("{\"masterWorksiteId\":13}")).andExpect(status().isForbidden());
+        mvc.perform(post(path).header(ADMIN,"wrong").contentType("application/json").content("{\"masterWorksiteId\":13}")).andExpect(status().isForbidden());
+        mvc.perform(post(path).header(ADMIN,env.get("WHATSAPP_REPORTING_ADMIN_SECRET"),"duplicate").contentType("application/json").content("{\"masterWorksiteId\":13}")).andExpect(status().isForbidden());
+        mvc.perform(post(path).header(ADMIN,env.get("WHATSAPP_REPORTING_ADMIN_SECRET")).contentType("application/json").content("{\"create\":{\"approvedName\":\" \"}}")).andExpect(status().isBadRequest());
+        mvc.perform(post(path).header(ADMIN,env.get("WHATSAPP_REPORTING_ADMIN_SECRET")).contentType("application/json").content("{\"masterWorksiteId\":13}")).andExpect(status().isOk()).andExpect(jsonPath("$.originalDescription").value("قرب المدرسة القديمة"));
+    }
+
+    private class FaultStore extends JdbcReportingStore {
         final AtomicReference<String> failAt=new AtomicReference<>();final AtomicBoolean abortAccepted=new AtomicBoolean();
         final AtomicInteger transactions=new AtomicInteger(),pendingQueries=new AtomicInteger();
         FaultStore(){super(jdbc,manager);}
         @Override public <T>T transaction(Supplier<T> action){transactions.incrementAndGet();return super.transaction(action);}
         @Override public List<String> pendingIds(int limit){pendingQueries.incrementAndGet();return super.pendingIds(limit);}
         @Override public void insertInbox(Inbox i){super.insertInbox(i);fail("INBOX");}
+        @Override public void resolveSite(String request,long entry,long master,String key,Instant at){super.resolveSite(request,entry,master,key,at);fail("RESOLUTION");}
         @Override public void saveOutbound(Outbound o){
             super.saveOutbound(o);fail(o.state());
             if(o.state().equals("ACCEPTED") && abortAccepted.compareAndSet(true,false)) {

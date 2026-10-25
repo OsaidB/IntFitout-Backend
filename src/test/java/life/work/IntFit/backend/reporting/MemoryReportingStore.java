@@ -11,6 +11,8 @@ public final class MemoryReportingStore implements ReportingStore {
     final Map<Long,Worker> workers=new LinkedHashMap<>();
     final Map<Long,Choice> choices=new LinkedHashMap<>();
     final Set<Long> selectable=new HashSet<>();
+    record Activity(long worker,long site,LocalDate date) { }
+    final List<Activity> activity=new ArrayList<>();
     Map<String,Request> requests=new LinkedHashMap<>();
     Map<String,Site> sites=new LinkedHashMap<>();
     Map<String,Coworker> mentions=new LinkedHashMap<>();
@@ -41,16 +43,24 @@ public final class MemoryReportingStore implements ReportingStore {
     }
     @Override public boolean configureSite(long id,boolean enabled) { if (!choices.containsKey(id)) return false; if(enabled) selectable.add(id); else selectable.remove(id);return true; }
     @Override public List<Choice> selectableSites() { return choices.values().stream().filter(c -> selectable.contains(c.id())).toList(); }
+    @Override public boolean activeWorker(long id,LocalDate date) { return activity.stream().anyMatch(a -> a.worker()==id && !a.date().isBefore(date.minusDays(6)) && !a.date().isAfter(date)); }
+    @Override public List<Choice> activeSites(LocalDate date) { return choices.values().stream().filter(c -> activity.stream().anyMatch(a -> a.site()==c.id() && !a.date().isBefore(date.minusDays(6)) && !a.date().isAfter(date))).toList(); }
+    @Override public List<Request> textCaptures(long worker) { return requests.values().stream().filter(r -> r.workerId()==worker && r.step().equals("OTHER_TEXT") && r.submittedAt()==null).toList(); }
     @Override public List<Choice> coworkers(long except) { return workers.values().stream().filter(w -> w.id()!=except && w.eligible()).map(w -> new Choice(w.id(),w.name())).toList(); }
     @Override public Request request(String id) { return requests.get(id); }
+    @Override public Long requestWorkerId(String id) { Request r=request(id);return r==null ? null : r.workerId(); }
     @Override public Request request(long worker,LocalDate date) { return requests.values().stream().filter(r -> r.workerId()==worker && r.workDate().equals(date)).findFirst().orElse(null); }
     @Override public void insertRequest(Request r) { if(request(r.workerId(),r.workDate())!=null) throw new AssertionError("duplicate request"); requests.put(r.id(),r); }
     @Override public void saveRequest(Request r) { if(requests.get(r.id()).submittedAt()!=null) throw new AssertionError("immutable submission"); requests.put(r.id(),r); }
     @Override public List<Request> requests(int limit) { return requests.values().stream().limit(limit).toList(); }
     @Override public List<Site> sites(String id) { return sites.values().stream().filter(s -> s.requestId().equals(id)).toList(); }
-    @Override public void addSite(Site s) { String key=s.requestId()+":"+s.siteId();if(sites.putIfAbsent(key,s)!=null) throw new AssertionError("duplicate site"); }
+    @Override public void addSite(Site s) { String key=s.requestId()+":"+s.entryId();if(sites.putIfAbsent(key,s)!=null) throw new AssertionError("duplicate site"); }
+    @Override public void resolveSite(String request,long entry,long master,String key,java.time.Instant at) {
+        Site s=sites.get(request+":"+entry);
+        sites.put(request+":"+entry,new Site(request,entry,null,s.label(),s.originalDescription(),master,choices.get(master).label(),key,at));
+    }
     @Override public List<Coworker> mentions(String id) { return mentions.values().stream().filter(c -> c.requestId().equals(id)).toList(); }
-    @Override public void addMention(Coworker c) { mentions.put(c.requestId()+":"+c.siteId()+":"+c.workerId(),c); }
+    @Override public void addMention(Coworker c) { mentions.put(c.requestId()+":"+c.entryId()+":"+c.workerId(),c); }
     @Override public void removeMention(String r,long s,long w) { mentions.remove(r+":"+s+":"+w); }
     @Override public boolean hasInbox(String key) { return inbox.containsKey(key); }
     @Override public void insertInbox(Inbox i) { if(inbox.putIfAbsent(i.key(),i)!=null) throw new AssertionError("duplicate inbox"); }

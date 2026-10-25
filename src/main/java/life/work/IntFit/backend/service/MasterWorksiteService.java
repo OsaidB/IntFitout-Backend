@@ -69,6 +69,7 @@ public class MasterWorksiteService {
 
         MasterWorksite entity = MasterWorksite.builder()
                 .approvedName(trimmedName)
+                .nickname(normalizeNickname(dto.getNickname()))
                 .notes(dto.getNotes())
                 .city(canonicalCity)
                 .area(canonicalArea)
@@ -85,6 +86,7 @@ public class MasterWorksiteService {
     public MasterWorksiteDTO update(Long id, MasterWorksiteDTO dto) {
         MasterWorksite entity = masterRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Master worksite not found"));
+        if (dto.getNickname()!=null) entity.setNickname(normalizeNickname(dto.getNickname()));
 
         if (dto.getApprovedName() != null) {
             String trimmedName = dto.getApprovedName().trim();
@@ -143,6 +145,23 @@ public class MasterWorksiteService {
         entity.setNotes(normalized);
 
         return mapper.toDTO(masterRepo.save(entity));
+    }
+
+    /** Narrow edit, preserving notes, approved name, location, size and child relations. */
+    @Transactional
+    public MasterWorksiteDTO updateNickname(Long id,String nickname) {
+        MasterWorksite entity=masterRepo.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND,"Master worksite not found"));
+        entity.setNickname(normalizeNickname(nickname));
+        return mapper.toDTO(masterRepo.save(entity));
+    }
+    public static String normalizeNickname(String value) {
+        if(value==null || value.isBlank()) return null;
+        String s=value.strip();
+        // UTF-16 bound is deliberately conservative for both database and mobile clients.
+        if(s.length()>80 || s.codePoints().anyMatch(c -> Character.isISOControl(c) || Character.getType(c)==Character.FORMAT || Character.getType(c)==Character.LINE_SEPARATOR || Character.getType(c)==Character.PARAGRAPH_SEPARATOR))
+            throw new IllegalArgumentException("Nickname must be at most 80 characters without control characters.");
+        return s;
     }
 
     /** ➕ NEW: delete master worksite (detaches children first to avoid FK issues) */

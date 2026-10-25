@@ -18,7 +18,11 @@ import java.util.function.Supplier;
 public class ReportingAdminController {
     private final ReportingSettings settings;
     private final ReportingService service;
-    public ReportingAdminController(ReportingSettings settings,ReportingService service) { this.settings=settings; this.service=service; }
+    private final ReportingResolutionService resolutions;
+    private final com.fasterxml.jackson.databind.ObjectMapper mapper=new com.fasterxml.jackson.databind.ObjectMapper();
+    public ReportingAdminController(ReportingSettings settings,ReportingService service) { this(settings,service,null); }
+    @org.springframework.beans.factory.annotation.Autowired
+    public ReportingAdminController(ReportingSettings settings,ReportingService service,ReportingResolutionService resolutions) { this.settings=settings; this.service=service;this.resolutions=resolutions; }
     @GetMapping("/status") public ResponseEntity<?> status(HttpServletRequest http) {
         return guarded(http,service::status);
     }
@@ -61,6 +65,24 @@ public class ReportingAdminController {
         return guarded(http,() -> {
             fields(body,Set.of("decision","metaId"));
             return service.resolve(id,body.path("decision").asText(null),body.path("metaId").asText(null));
+        });
+    }
+    @PostMapping("/requests/{id}/entries/{entryId}/resolve")
+    public ResponseEntity<?> resolveEntry(HttpServletRequest http,@PathVariable String id,@PathVariable long entryId,@RequestBody JsonNode body) {
+        return guarded(http,() -> {
+            fields(body,Set.of("masterWorksiteId","create"));
+            Long master=null;
+            if(body.has("masterWorksiteId")) {
+                if(!body.path("masterWorksiteId").isIntegralNumber() || !body.path("masterWorksiteId").canConvertToLong()) throw new ReportingProblem(400,"masterWorksiteId must be a positive integer.");
+                master=body.path("masterWorksiteId").longValue();
+            }
+            life.work.IntFit.backend.dto.MasterWorksiteDTO create=null;
+            if(body.has("create")) {
+                fields(body.get("create"),Set.of("approvedName","nickname","notes","city","area","subArea","locationDetails","projectSizeTier","estimatedAreaM2"));
+                try { create=mapper.treeToValue(body.get("create"),life.work.IntFit.backend.dto.MasterWorksiteDTO.class); }
+                catch(Exception e) { throw new ReportingProblem(400,"Invalid new master definition."); }
+            }
+            return resolutions.resolve(id,entryId,master,create);
         });
     }
     private ResponseEntity<?> guarded(HttpServletRequest http,Supplier<?> operation) {

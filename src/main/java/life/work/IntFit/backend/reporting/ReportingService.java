@@ -12,7 +12,7 @@ import java.time.*;
 import java.util.*;
 import static life.work.IntFit.backend.reporting.ReportingModel.*;
 
-/** No dependencies on assignments, payroll, wages, uploads, or their repositories. */
+/** Reporting mutations only. Assignment activity is read through the store; never saved here. */
 @Service
 public class ReportingService {
     private static final Logger log=LoggerFactory.getLogger(ReportingService.class);
@@ -53,7 +53,7 @@ public class ReportingService {
             requirePilot(store.lockWorker(settings.workerId));
             Request existing=store.request(settings.workerId,date);
             if (existing!=null) return view(existing);
-            if (store.selectableSites().isEmpty()) throw new ReportingProblem(409,"Explicitly configure at least one selectable master worksite first.");
+            requireActivity(settings.workerId,date);
             Request r=new Request(UUID.randomUUID().toString(),settings.workerId,settings.recipient,settings.phoneId,date,
                     "START",0,null,null,clock.instant(),null,null);
             store.insertRequest(r);
@@ -94,6 +94,7 @@ public class ReportingService {
     private void receiveMessage(JsonNode m) {
         String messageId=externalId(m.path("id").asText());
         if (messageId==null) return;
+        if ("text".equals(m.path("type").asText())) { receiveText(m,messageId); return; }
         String context=externalId(m.path("context").path("id").asText());
         String actionValue=actionValue(m);
         ReportingFlow.Action action=ReportingFlow.action(actionValue);
@@ -110,7 +111,7 @@ public class ReportingService {
                 Outbound prompt=store.outboundFor(r.id()).stream().filter(o -> o.revision()==r.revision()).findFirst().orElse(null);
                 if (prompt!=null && context!=null && flow.issued(prompt.payload(),actionValue)) {
                     if ("ACCEPTED".equals(prompt.state()) && context.equals(prompt.metaId()))
-                        disposition=advance(r,action,sentAt) ? "APPLIED" : "IGNORED";
+                        disposition=advance(r,action,sentAt,prompt.payload()) ? "APPLIED" : "IGNORED";
                     else if (Set.of("SENDING","UNCERTAIN").contains(prompt.state()) && prompt.metaId()==null)
                         disposition="DEFERRED"; // Validate the context only after the uncertain Meta ID is resolved.
                 }
@@ -120,7 +121,7 @@ public class ReportingService {
             return null;
         });
     }
-    private boolean advance(Request r,ReportingFlow.Action a,Instant received) {
+    private boolean advance(Request r,ReportingFlow.Action a,Instant received,String issuedPayload) {
         String next=null, outcome=r.outcome(); Long current=r.currentSite(); int page=0;
         List<Site> sites=store.sites(r.id());
         switch (r.step()) {
@@ -129,19 +130,25 @@ public class ReportingService {
                 if (a.verb().equals("none")) { next="CONFIRM_NONE"; outcome="DID_NOT_WORK"; }
             }
             case "SITES" -> {
-                if (a.verb().equals("site") && sites.size()<50 && sites.stream().noneMatch(s -> s.siteId()==a.id())) {
-                    Choice choice=store.selectableSites().stream().filter(c -> c.id()==a.id()).findFirst().orElse(null);
-                    if (choice!=null) { store.addSite(new Site(r.id(),choice.id(),ReportingFlow.label(choice.label(),255))); next="COWORKERS"; current=choice.id(); }
+                if (a.verb().equals("site") && sites.size()<50 && sites.stream().noneMatch(s -> Objects.equals(s.siteId(),a.id()))) {
+                    Choice choice=store.activeSites(r.workDate()).stream().filter(c -> c.id()==a.id()).findFirst().orElse(null);
+                    if (choice!=null) {
+                        current=nextEntry(sites);
+                        String shown=flow.issuedLabel(issuedPayload,ReportingFlow.token(r,"site",a.id(),a.page()));
+                        store.addSite(new Site(r.id(),current,choice.id(),shown==null ? ReportingFlow.siteLabel(choice) : shown,null,null,null,null,null)); next="COWORKERS";
+                    }
                 }
+                if (a.verb().equals("other") && sites.size()<50) { next="OTHER_TEXT"; current=null; }
                 if (a.verb().equals("finish") && !sites.isEmpty()) { next="CONFIRM_WORK"; current=null; }
                 if (a.verb().equals("page")) { next="SITES"; page=a.page(); }
             }
+            case "OTHER_TEXT" -> { if (a.verb().equals("cancel")) { next="SITES"; current=null; } }
             case "COWORKERS" -> {
                 if (a.verb().equals("cow") && current!=null) {
                     Choice choice=store.coworkers(r.workerId()).stream().filter(c -> c.id()==a.id()).findFirst().orElse(null);
                     if (choice!=null) {
                         final long siteId=current;
-                        boolean exists=store.mentions(r.id()).stream().anyMatch(c -> c.siteId()==siteId && c.workerId()==choice.id());
+                        boolean exists=store.mentions(r.id()).stream().anyMatch(c -> c.entryId()==siteId && c.workerId()==choice.id());
                         if (exists) store.removeMention(r.id(),siteId,choice.id());
                         else store.addMention(new Coworker(r.id(),siteId,choice.id(),ReportingFlow.label(choice.label(),255)));
                         next="COWORKERS"; page=a.page();
@@ -160,8 +167,66 @@ public class ReportingService {
         Instant last=r.lastInboundAt()!=null && r.lastInboundAt().isAfter(received) ? r.lastInboundAt() : received;
         Request updated=r.advance(next,current,outcome,last,next.equals("SUBMITTED"));
         store.saveRequest(updated);
-        intent(updated,"PROMPT",flow.prompt(updated,store.sites(r.id()),store.mentions(r.id()),store.selectableSites(),store.coworkers(r.workerId()),page));
+        prompt(updated,page);
         return true;
+    }
+    private static long nextEntry(List<Site> sites) { return sites.stream().mapToLong(Site::entryId).max().orElse(0)+1; }
+    private void prompt(Request r,int page) {
+        intent(r,"PROMPT",flow.prompt(r,store.sites(r.id()),store.mentions(r.id()),store.activeSites(r.workDate()),store.coworkers(r.workerId()),page));
+    }
+    /** Text is never assigned to the latest phone request. Lock the pilot, then inspect persisted captures.
+     * Without context, exactly one capture with an accepted prompt is required. Conflicting supplied
+     * context is never discarded. Uncertain contextual replies defer until evidenced Meta binding. */
+    private void receiveText(JsonNode m,String messageId) {
+        boolean contextProvided=m.has("context");
+        String supplied=m.path("context").path("id").asText(null);
+        String context=externalId(supplied);
+        String body=m.path("text").path("body").isTextual() ? m.path("text").path("body").textValue() : null;
+        String accepted=ReportingFlow.description(body);
+        Instant sentAt=messageTime(m.path("timestamp").asText());
+        String key=hash("message:"+settings.phoneId+":"+messageId);
+        store.transaction(() -> {
+            Worker worker=store.lockWorker(settings.workerId);
+            if (store.hasInbox(key)) return null;
+            List<Request> captures=store.textCaptures(settings.workerId).stream().filter(r ->
+                    settings.recipient.equals(r.recipient()) && settings.phoneId.equals(r.phoneId())).toList();
+            List<Request> candidates=captures.stream().filter(r -> {
+                Outbound p=currentPrompt(r);
+                return p!=null && ((context!=null && context.equals(p.metaId())) ||
+                        (captures.size()==1 && p.metaId()==null && Set.of("SENDING","UNCERTAIN").contains(p.state())));
+            }).toList();
+            if (!contextProvided) candidates=captures.size()==1 ? captures : List.of();
+            if (contextProvided && context==null) candidates=List.of();
+            Request r=candidates.size()==1 ? candidates.getFirst() : null;
+            String disposition=captures.size()>1 && !contextProvided ? "AMBIGUOUS" : "IGNORED";
+            String action=null,storedText=null;
+            if (r!=null && pilotMatches(worker) && sentAt!=null) {
+                Outbound p=currentPrompt(r);
+                // Seconds are Meta's timestamp precision; do not reject same-second replies.
+                if (p!=null && !sentAt.isBefore(p.createdAt().truncatedTo(java.time.temporal.ChronoUnit.SECONDS))) {
+                    action=ReportingFlow.token(r,"text",0,0);
+                    if ("ACCEPTED".equals(p.state()) && (!contextProvided || context.equals(p.metaId()))) {
+                        applyText(r,accepted,sentAt);
+                        disposition=accepted==null ? "INVALID_TEXT" : "APPLIED"; storedText=accepted;
+                    } else if (context!=null && accepted!=null && p.metaId()==null && Set.of("SENDING","UNCERTAIN").contains(p.state())) {
+                        disposition="DEFERRED"; storedText=accepted;
+                    }
+                }
+            }
+            store.insertInbox(new Inbox(key,messageId,context,"TEXT",action,r==null ? null : r.id(),disposition,clock.instant(),sentAt,storedText));
+            return null;
+        });
+    }
+    private Outbound currentPrompt(Request r) { return store.outboundFor(r.id()).stream().filter(o -> o.revision()==r.revision()).findFirst().orElse(null); }
+    private void applyText(Request r,String description,Instant at) {
+        Long entry=null;
+        if(description!=null) {
+            entry=nextEntry(store.sites(r.id()));
+            store.addSite(new Site(r.id(),entry,null,ReportingFlow.label(description,255),description,null,null,null,null));
+        }
+        Instant last=r.lastInboundAt()!=null && r.lastInboundAt().isAfter(at) ? r.lastInboundAt() : at;
+        Request updated=r.advance(description==null ? "OTHER_TEXT" : "COWORKERS",entry,r.outcome(),last,false);
+        store.saveRequest(updated);prompt(updated,0);
     }
     private void receiveStatus(JsonNode s) {
         String metaId=externalId(s.path("id").asText());
@@ -200,6 +265,7 @@ public class ReportingService {
             Request r=store.request(o.requestId());
             if (r==null || r.workerId()!=settings.workerId || !settings.recipient.equals(r.recipient()) || !settings.phoneId.equals(r.phoneId()))
                 throw new ReportingProblem(409,"Outbound intent does not match the configured pilot and real sender.");
+            if(o.kind().equals("TEMPLATE")) requireActivity(r.workerId(),r.workDate());
             boolean expired=o.revision()!=r.revision()
                     || (o.kind().equals("TEMPLATE") && !r.workDate().equals(LocalDate.now(clock.withZone(ZONE))))
                     || (!o.kind().equals("TEMPLATE") && (r.lastInboundAt()==null || !r.lastInboundAt().isAfter(clock.instant().minus(Duration.ofHours(24)))));
@@ -273,8 +339,11 @@ public class ReportingService {
                     && pilotMatches(worker) && r.workerId()==settings.workerId && settings.recipient.equals(r.recipient())
                     && settings.phoneId.equals(r.phoneId())) {
                 Outbound prompt=store.outboundFor(requestId).stream().filter(o -> o.revision()==r.revision()).findFirst().orElse(null);
-                if (prompt!=null && "ACCEPTED".equals(prompt.state()) && Objects.equals(prompt.metaId(),i.contextId())
-                        && flow.issued(prompt.payload(),i.action())) disposition=advance(r,a,i.messageAt()) ? "APPLIED" : "IGNORED";
+                if (prompt!=null && "ACCEPTED".equals(prompt.state()) && Objects.equals(prompt.metaId(),i.contextId())) {
+                    if (i.kind().equals("TEXT") && r.step().equals("OTHER_TEXT") && i.acceptedText()!=null) {
+                        applyText(r,i.acceptedText(),i.messageAt()); disposition="APPLIED";
+                    } else if (flow.issued(prompt.payload(),i.action())) disposition=advance(r,a,i.messageAt(),prompt.payload()) ? "APPLIED" : "IGNORED";
+                }
             }
             store.saveInbox(i.disposition(disposition));
         }
@@ -285,6 +354,9 @@ public class ReportingService {
         return w!=null && w.eligible() && w.id()==settings.workerId && settings.recipient.equals(w.number());
     }
     private void requirePilot(Worker w) { if (!pilotMatches(w)) throw new ReportingProblem(409,"Explicit pilot eligibility and normalized number must match the configured worker and recipient."); }
+    private void requireActivity(long worker,LocalDate date) {
+        if(!store.activeWorker(worker,date)) throw new ReportingProblem(409,"Opening reports require a saved assignment between workDate minus six days and workDate, inclusive.");
+    }
     private static OutboundView outboundView(Outbound o) { return new OutboundView(o.id(),o.revision(),o.kind(),o.state(),o.metaId(),o.delivery()); }
     private static Iterable<JsonNode> array(JsonNode node) { return node.isArray() ? node : List.of(); }
     private static String actionValue(JsonNode m) {

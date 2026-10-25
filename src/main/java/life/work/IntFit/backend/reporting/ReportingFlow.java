@@ -15,7 +15,7 @@ final class ReportingFlow {
         return "wr:"+r.id()+":"+r.revision()+":"+action+":"+id+":"+page;
     }
     static Action action(String value) {
-        if (value == null || !value.matches("wr:[0-9a-f-]{36}:[0-9]{1,9}:(start|none|site|cow|done|finish|submit|back|page):[0-9]{1,18}:[0-9]{1,6}")) return null;
+        if (value == null || !value.matches("wr:[0-9a-f-]{36}:[0-9]{1,9}:(start|none|site|other|cancel|text|cow|done|finish|submit|back|page):[0-9]{1,18}:[0-9]{1,6}")) return null;
         try {
             String[] a=value.split(":");
             return new Action(UUID.fromString(a[1]).toString(),Long.parseLong(a[2]),a[3],Long.parseLong(a[4]),Integer.parseInt(a[5]));
@@ -36,20 +36,22 @@ final class ReportingFlow {
         switch (r.step()) {
             case "START" -> interactive=buttons("أين عملت يوم "+date+"؟",r,new String[][]{{"start","تسجيل مواقع العمل"},{"none","لم أعمل"}});
             case "SITES" -> {
-                Set<Long> selected=new HashSet<>(); sites.forEach(s -> selected.add(s.siteId()));
+                Set<Long> selected=new HashSet<>(); sites.stream().filter(s -> s.siteId()!=null).forEach(s -> selected.add(s.siteId()));
                 List<Choice> remaining=sites.size()>=50 ? List.of() : availableSites.stream().filter(s -> !selected.contains(s.id())).toList();
                 interactive=list(r,"اختر موقع العمل ليوم "+date+". يمكنك تسجيل أكثر من موقع. المواقع المسجلة: "+sites.size(),
-                        remaining,"site",page,sites.isEmpty() ? null : new Choice(0,"انتهيت من المواقع"),"finish",Set.of());
+                        remaining,"site",page,sites.isEmpty() ? null : new Choice(0,"انتهيت من المواقع"),"finish",Set.of(),sites.size()<50);
             }
+            case "OTHER_TEXT" -> interactive=buttons("ما اسم الموقع الذي عملت فيه؟ اكتب الاسم أو وصفًا يساعدنا على معرفته.\nأدخل من 2 إلى 300 حرف دون رموز تحكم. يمكنك الرد على هذه الرسالة لتحديد التقرير، أو إلغاء الإدخال.",r,
+                    new String[][]{{"cancel","إلغاء والعودة"}});
             case "COWORKERS" -> {
                 Set<Long> selected=new HashSet<>();
-                mentions.stream().filter(c -> Objects.equals(r.currentSite(),c.siteId())).forEach(c -> selected.add(c.workerId()));
-                String site=sites.stream().filter(s -> Objects.equals(r.currentSite(),s.siteId())).map(Site::label).findFirst().orElse("");
+                mentions.stream().filter(c -> Objects.equals(r.currentSite(),c.entryId())).forEach(c -> selected.add(c.workerId()));
+                String site=sites.stream().filter(s -> Objects.equals(r.currentSite(),s.entryId())).map(Site::label).findFirst().orElse("");
                 interactive=list(r,"من عمل معك في "+label(site,100)+"؟ الاختيار اختياري. اضغط الاسم لتحديده أو إلغاء تحديده، ثم متابعة.",
-                        coworkers,"cow",page,new Choice(0,"متابعة بدون أسماء أخرى"),"done",selected);
+                        coworkers,"cow",page,new Choice(0,"متابعة بدون أسماء أخرى"),"done",selected,false);
             }
             case "CONFIRM_WORK" -> interactive=buttons("تأكيد تقرير يوم "+date+": سجلت "+sites.size()+" موقع/مواقع و"+mentions.size()+
-                    " إشارة لزملاء. المواقع: "+label(String.join("، ",sites.stream().map(Site::label).toList()),550)+
+                    " إشارة لزملاء. المواقع: "+summary(sites)+
                     ". هل تريد إرسال التقرير للمراجعة؟ الساعات يحددها المسؤول، وإشارات الزملاء معلومات مساعدة فقط.",r,
                     new String[][]{{"submit","إرسال للمراجعة"},{"back","عودة للمواقع"}});
             case "CONFIRM_NONE" -> interactive=buttons("تأكيد: لم أعمل يوم "+date+". هل تريد إرسال التقرير للمراجعة؟",r,
@@ -64,23 +66,52 @@ final class ReportingFlow {
     }
     private static Map<String,Object> buttons(String text,Request r,String[][] actions) {
         List<Object> buttons=new ArrayList<>();
-        for (String[] a:actions) buttons.add(Map.of("type","reply","reply",Map.of("id",token(r,a[0],0,0),"title",a[1])));
+        for (String[] a:actions) buttons.add(Map.of("type","reply","reply",Map.of("id",token(r,a[0],0,0),"title",label(a[1],20))));
         return Map.of("type","button","body",Map.of("text",text),"action",Map.of("buttons",buttons));
     }
     private static Map<String,Object> list(Request r,String text,List<Choice> choices,String verb,int requestedPage,
-                                           Choice end,String endVerb,Set<Long> selected) {
-        int pages=Math.max(1,(choices.size()+6)/7);
+                                           Choice end,String endVerb,Set<Long> selected,boolean includeOther) {
+        // Sites reserve a fourth action for Other; at most 6 + previous + next + Other + finish = 10.
+        int size=verb.equals("site") ? 6 : 7;
+        int pages=Math.max(1,(choices.size()+size-1)/size);
         int page=Math.min(Math.max(0,requestedPage),pages-1);
         List<Object> rows=new ArrayList<>();
-        for (Choice c:choices.subList(page*7,Math.min(choices.size(),page*7+7)))
-            rows.add(Map.of("id",token(r,verb,c.id(),page),"title",label((selected.contains(c.id()) ? "✓ " : "")+c.label(),24)));
+        for (Choice c:choices.subList(page*size,Math.min(choices.size(),page*size+size)))
+            rows.add(Map.of("id",token(r,verb,c.id(),page),"title",verb.equals("site") ? siteLabel(c) : label((selected.contains(c.id()) ? "✓ " : "")+c.label(),24)));
         if (page>0) rows.add(Map.of("id",token(r,"page",0,page-1),"title","الصفحة السابقة"));
         if (page+1<pages) rows.add(Map.of("id",token(r,"page",0,page+1),"title","الصفحة التالية"));
+        if (includeOther) rows.add(Map.of("id",token(r,"other",0,0),"title","موقع آخر","description","غير موجود بالقائمة"));
         if (end!=null) rows.add(Map.of("id",token(r,endVerb,0,0),"title",end.label()));
         // A site can be withdrawn between prompts; provide a harmless navigation choice, never a free-text fallback.
         if (rows.isEmpty()) rows.add(Map.of("id",token(r,"page",0,0),"title","تحديث القائمة"));
         return Map.of("type","list","body",Map.of("text",text),"action",Map.of("button","عرض الخيارات",
                 "sections",List.of(Map.of("title","الخيارات","rows",rows))));
+    }
+    static String siteLabel(Choice choice) {
+        String suffix=" #"+choice.id();
+        return label(choice.label(),Math.max(1,24-suffix.length()))+suffix;
+    }
+    private static String summary(List<Site> sites) {
+        int bound=Math.max(6,550/Math.max(1,sites.size())-6);
+        List<String> labels=new ArrayList<>();
+        for(int i=0;i<sites.size();i++) labels.add((i+1)+". "+label(sites.get(i).label(),bound));
+        return String.join("، ",labels);
+    }
+    /** Retain accepted original text (trimmed only); reject controls rather than silently changing it. */
+    static String description(String value) {
+        if(value==null) return null;
+        String s=value.strip();int count=s.codePointCount(0,s.length());
+        if(count<2 || count>300 || s.codePoints().noneMatch(Character::isLetterOrDigit) || s.codePoints().anyMatch(c -> Character.isISOControl(c) || Character.getType(c)==Character.FORMAT || Character.getType(c)==Character.LINE_SEPARATOR || Character.getType(c)==Character.PARAGRAPH_SEPARATOR)) return null;
+        return s;
+    }
+    String issuedLabel(String payload,String token) {
+        try { return findLabel(mapper.readTree(payload),token); }
+        catch(JsonProcessingException e) { return null; }
+    }
+    private static String findLabel(JsonNode node,String token) {
+        if(token.equals(node.path("id").asText()) && node.path("title").isTextual()) return node.path("title").asText();
+        for(JsonNode child:node) { String found=findLabel(child,token);if(found!=null)return found; }
+        return null;
     }
     boolean issued(String payload,String token) {
         try { return contains(mapper.readTree(payload),token); }

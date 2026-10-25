@@ -18,6 +18,7 @@ class ReportingOutboxPumpTest {
         var settings=new ReportingSettings(ReportingServiceTest.environment()::get);
         var store=new MemoryReportingStore();store.workers.put(7L,new ReportingModel.Worker(7,"عامل",true,"970599000007"));
         store.choices.put(11L,new ReportingModel.Choice(11,"موقع"));store.selectable.add(11L);
+        store.activity.add(new MemoryReportingStore.Activity(7,11,LocalDate.of(2026,10,22)));
         AtomicInteger sends=new AtomicInteger();
         var service=new ReportingService(store,settings,p -> {sends.incrementAndGet();return new ReportingSender.Result("REJECTED",null);},new ReportingServiceTest.MutableClock(),new ObjectMapper());
         FakeScheduler scheduler=new FakeScheduler();AtomicInteger factories=new AtomicInteger();

@@ -38,11 +38,23 @@ public class JdbcReportingStore implements ReportingStore {
     @Override public List<Choice> selectableSites() {
         return jdbc.query("SELECT id,approved_name FROM master_worksites WHERE whatsapp_reporting_selectable=TRUE ORDER BY id", CHOICE);
     }
+    @Override public boolean activeWorker(long id,LocalDate date) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM work_assignments WHERE team_member_id=? AND date BETWEEN ? AND ?)",Boolean.class,id,date.minusDays(6),date));
+    }
+    @Override public List<Choice> activeSites(LocalDate date) {
+        return jdbc.query("SELECT m.id,COALESCE(NULLIF(TRIM(m.nickname),''),m.approved_name) FROM master_worksites m WHERE EXISTS(SELECT 1 FROM work_assignments a WHERE a.master_worksite_id=m.id AND a.date BETWEEN ? AND ?) ORDER BY m.id",CHOICE,date.minusDays(6),date);
+    }
+    @Override public List<Request> textCaptures(long worker) {
+        return jdbc.query("SELECT * FROM whatsapp_report_requests WHERE worker_id=? AND step='OTHER_TEXT' AND submitted_at IS NULL ORDER BY created_at,id FOR UPDATE",REQUEST,worker);
+    }
     @Override public List<Choice> coworkers(long except) {
         return jdbc.query("SELECT id,name FROM team_members WHERE whatsapp_reporting_eligible=TRUE AND id<>? ORDER BY id", CHOICE, except);
     }
     @Override public Request request(String id) {
         return one(jdbc.query("SELECT * FROM whatsapp_report_requests WHERE id=? FOR UPDATE", REQUEST, id));
+    }
+    @Override public Long requestWorkerId(String id) {
+        return one(jdbc.queryForList("SELECT worker_id FROM whatsapp_report_requests WHERE id=?",Long.class,id));
     }
     @Override public Request request(long workerId, LocalDate date) {
         return one(jdbc.query("SELECT * FROM whatsapp_report_requests WHERE worker_id=? AND work_date=? FOR UPDATE", REQUEST, workerId, date));
@@ -59,34 +71,38 @@ public class JdbcReportingStore implements ReportingStore {
         return jdbc.query("SELECT * FROM whatsapp_report_requests ORDER BY created_at DESC,id DESC LIMIT ?", REQUEST, limit);
     }
     @Override public List<Site> sites(String id) {
-        return jdbc.query("SELECT request_id,site_id,label FROM whatsapp_report_sites WHERE request_id=? ORDER BY site_id",
-                (r,n) -> new Site(r.getString(1),r.getLong(2),r.getString(3)), id);
+        return jdbc.query("SELECT s.*,m.approved_name AS business_name FROM whatsapp_report_sites s LEFT JOIN master_worksites m ON m.id=COALESCE(s.resolved_master_id,s.site_id) WHERE s.request_id=? ORDER BY s.entry_id",
+                (r,n) -> new Site(r.getString("request_id"),r.getLong("entry_id"),r.getObject("site_id",Long.class),r.getString("label"),r.getString("original_description"),r.getObject("resolved_master_id",Long.class),r.getString("business_name"),r.getString("resolution_key"),instant(r,"resolved_at")), id);
     }
     @Override public void addSite(Site s) {
-        jdbc.update("INSERT INTO whatsapp_report_sites(request_id,site_id,label) VALUES(?,?,?)", s.requestId(),s.siteId(),s.label());
+        jdbc.update("INSERT INTO whatsapp_report_sites(request_id,entry_id,site_id,label,original_description) VALUES(?,?,?,?,?)", s.requestId(),s.entryId(),s.siteId(),s.label(),s.originalDescription());
+    }
+    @Override public void resolveSite(String requestId,long entry,long master,String key,Instant at) {
+        int changed=jdbc.update("UPDATE whatsapp_report_sites SET resolved_master_id=?,resolution_key=?,resolved_at=? WHERE request_id=? AND entry_id=? AND site_id IS NULL AND resolved_master_id IS NULL",master,key,ts(at),requestId,entry);
+        if(changed!=1) throw new ReportingProblem(409,"Entry resolution conflicts with persisted state.");
     }
     @Override public List<Coworker> mentions(String id) {
-        return jdbc.query("SELECT request_id,site_id,worker_id,label FROM whatsapp_report_coworkers WHERE request_id=? ORDER BY site_id,worker_id",
+        return jdbc.query("SELECT request_id,entry_id,worker_id,label FROM whatsapp_report_coworkers WHERE request_id=? ORDER BY entry_id,worker_id",
                 (r,n) -> new Coworker(r.getString(1),r.getLong(2),r.getLong(3),r.getString(4)), id);
     }
     @Override public void addMention(Coworker c) {
-        jdbc.update("INSERT INTO whatsapp_report_coworkers(request_id,site_id,worker_id,label) VALUES(?,?,?,?)",
-                c.requestId(),c.siteId(),c.workerId(),c.label());
+        jdbc.update("INSERT INTO whatsapp_report_coworkers(request_id,entry_id,worker_id,label) VALUES(?,?,?,?)",
+                c.requestId(),c.entryId(),c.workerId(),c.label());
     }
     @Override public void removeMention(String id,long site,long worker) {
-        jdbc.update("DELETE FROM whatsapp_report_coworkers WHERE request_id=? AND site_id=? AND worker_id=?",id,site,worker);
+        jdbc.update("DELETE FROM whatsapp_report_coworkers WHERE request_id=? AND entry_id=? AND worker_id=?",id,site,worker);
     }
     @Override public boolean hasInbox(String key) {
         return !jdbc.queryForList("SELECT event_key FROM whatsapp_report_inbox WHERE event_key=?",String.class,key).isEmpty();
     }
     @Override public void insertInbox(Inbox i) {
-        jdbc.update("INSERT INTO whatsapp_report_inbox(event_key,message_id,context_id,kind,action,request_id,disposition,received_at,message_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                i.key(),i.messageId(),i.contextId(),i.kind(),i.action(),i.requestId(),i.disposition(),ts(i.receivedAt()),ts(i.messageAt()));
+        jdbc.update("INSERT INTO whatsapp_report_inbox(event_key,message_id,context_id,kind,action,request_id,disposition,received_at,message_at,accepted_text) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                i.key(),i.messageId(),i.contextId(),i.kind(),i.action(),i.requestId(),i.disposition(),ts(i.receivedAt()),ts(i.messageAt()),i.acceptedText());
     }
     @Override public List<Inbox> inboxFor(String id) {
         return jdbc.query("SELECT * FROM whatsapp_report_inbox WHERE request_id=? ORDER BY received_at,event_key",
                 (r,n) -> new Inbox(r.getString("event_key"),r.getString("message_id"),r.getString("context_id"),r.getString("kind"),
-                        r.getString("action"),r.getString("request_id"),r.getString("disposition"),instant(r,"received_at"),instant(r,"message_at")),id);
+                        r.getString("action"),r.getString("request_id"),r.getString("disposition"),instant(r,"received_at"),instant(r,"message_at"),r.getString("accepted_text")),id);
     }
     @Override public void saveInbox(Inbox i) { jdbc.update("UPDATE whatsapp_report_inbox SET disposition=? WHERE event_key=?",i.disposition(),i.key()); }
     @Override public List<String> observedStatuses(String id) {

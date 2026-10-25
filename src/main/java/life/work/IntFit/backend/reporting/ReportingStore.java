@@ -13,14 +13,19 @@ public interface ReportingStore {
     void configureWorker(long id, boolean eligible, String number);
     boolean configureSite(long id, boolean selectable);
     List<Choice> selectableSites();
+    boolean activeWorker(long workerId, LocalDate date);
+    List<Choice> activeSites(LocalDate date);
+    List<Request> textCaptures(long workerId);
     List<Choice> coworkers(long exceptWorkerId);
     Request request(String id); // FOR UPDATE
+    Long requestWorkerId(String id); // Non-locking immutable owner lookup, before worker/request lock order.
     Request request(long workerId, LocalDate date);
     void insertRequest(Request request);
     void saveRequest(Request request);
     List<Request> requests(int limit);
     List<Site> sites(String requestId);
     void addSite(Site site);
+    void resolveSite(String requestId,long entryId,long masterId,String key,java.time.Instant at);
     List<Coworker> mentions(String requestId);
     void addMention(Coworker coworker);
     void removeMention(String requestId, long siteId, long workerId);

@@ -8,6 +8,8 @@ import lombok.*;
 public class MasterWorksiteDTO {
     private Long id;
     private String approvedName;
+    // null/omission preserves on update; empty/blank string explicitly clears.
+    private String nickname;
     private String notes;
 
     // Location

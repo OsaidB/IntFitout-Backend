@@ -13,6 +13,7 @@ class ReportingLoggingTest {
     @Test void providerExceptionDetailsAndPersonalDataNeverReachReportingLogs() {
         var env=ReportingServiceTest.environment();var store=new MemoryReportingStore();
         store.workers.put(7L,new ReportingModel.Worker(7,"اسم شخصي تجريبي",true,"970599000007"));store.choices.put(11L,new ReportingModel.Choice(11,"موقع"));store.selectable.add(11L);
+        store.activity.add(new MemoryReportingStore.Activity(7,11,LocalDate.of(2026,10,22)));
         Logger logger=(Logger)LoggerFactory.getLogger(ReportingService.class);ListAppender<ILoggingEvent> appender=new ListAppender<>();appender.start();logger.addAppender(appender);
         try {
             var service=new ReportingService(store,new ReportingSettings(env::get),p -> {throw new IllegalStateException(env.get("WHATSAPP_ACCESS_TOKEN")+" 970599000007 اسم شخصي تجريبي raw provider response");},new ReportingServiceTest.MutableClock(),new ObjectMapper());

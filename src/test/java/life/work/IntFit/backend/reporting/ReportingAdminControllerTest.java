@@ -38,17 +38,18 @@ class ReportingAdminControllerTest {
             case "report" -> get(BASE+"/requests/"+id);
             case "dispatch" -> post(BASE+"/outbound/"+id+"/dispatch");
             case "resolve" -> post(BASE+"/outbound/"+id+"/resolve").contentType(MediaType.APPLICATION_JSON).content("{\"decision\":\"abandon\"}");
+            case "entry" -> post(BASE+"/requests/"+id+"/entries/1/resolve").contentType(MediaType.APPLICATION_JSON).content("{\"masterWorksiteId\":11}");
             default -> throw new AssertionError();
         };
     }
-    @ParameterizedTest @ValueSource(strings={"status","workers","worksites","initiate","reports","report","dispatch","resolve"})
+    @ParameterizedTest @ValueSource(strings={"status","workers","worksites","initiate","reports","report","dispatch","resolve","entry"})
     void allRoutesRejectMissingWrongAndDuplicateCredentialsWithoutTouchingStore(String route) throws Exception {
         mvc.perform(route(route)).andExpect(status().isForbidden());
         mvc.perform(route(route).header(HEADER,"wrong-secret")).andExpect(status().isForbidden());
         mvc.perform(route(route).header(HEADER,env.get("WHATSAPP_REPORTING_ADMIN_SECRET"),"duplicate")).andExpect(status().isForbidden());
         assertEquals(0,store.transactions);
     }
-    @ParameterizedTest @ValueSource(strings={"status","workers","worksites","initiate","reports","report","dispatch","resolve"})
+    @ParameterizedTest @ValueSource(strings={"status","workers","worksites","initiate","reports","report","dispatch","resolve","entry"})
     void everyRouteFailsClosedWithMissingAdminConfiguration(String route) throws Exception {
         env.remove("WHATSAPP_REPORTING_ADMIN_SECRET");build();
         mvc.perform(route(route).header(HEADER,"anything")).andExpect(status().isServiceUnavailable());assertEquals(0,store.transactions);

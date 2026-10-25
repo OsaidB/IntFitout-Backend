@@ -21,6 +21,9 @@ public class MasterWorksite {
     @Column(nullable = false, unique = true)
     private String approvedName;
 
+    @Column(length = 80)
+    private String nickname;
+
     private String notes;
 
     // Location
