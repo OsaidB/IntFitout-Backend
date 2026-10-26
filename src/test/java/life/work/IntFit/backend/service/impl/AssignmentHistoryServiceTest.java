@@ -41,7 +41,7 @@ class AssignmentHistoryServiceTest {
 
     private WorkAssignmentServiceImpl service() {
         return new WorkAssignmentServiceImpl(
-                workAssignmentRepo, masterWorksiteRepo, teamMemberRepo, overtimeRepo, mapper);
+                workAssignmentRepo, masterWorksiteRepo, teamMemberRepo, overtimeRepo, mapper, org.mockito.Mockito.mock(life.work.IntFit.backend.service.AssignmentConcurrency.class));
     }
 
     /** One (date, member) row with a siteCount above 1 still counts as one worker. */

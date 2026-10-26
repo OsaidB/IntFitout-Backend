@@ -40,6 +40,7 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
     private final TeamMemberRepository teamMemberRepo;
     private final WorkAssignmentOvertimeRepository overtimeRepo;
     private final WorkAssignmentMapper mapper;
+    private final life.work.IntFit.backend.service.AssignmentConcurrency concurrency;
 
     @Override
     @Transactional(readOnly = true)
@@ -48,8 +49,9 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
     }
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
     public DailyAssignmentsViewDTO getDay(LocalDate date) {
+        long revision = concurrency.revision(date);
         List<WorkAssignment> rows = workAssignmentRepo.findByDate(date);
         List<WorkAssignmentOvertime> overtimeRows = overtimeRepo.findAllByDate(date);
 
@@ -68,7 +70,7 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
                             assigned.contains(o.getTeamMember().getId()));
                 })
                 .toList();
-        return new DailyAssignmentsViewDTO(date, toRows(rows, overtimeRows), overtime);
+        return new DailyAssignmentsViewDTO(date, toRows(rows, overtimeRows), overtime, revision);
     }
 
     /**
@@ -135,9 +137,11 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
      * changes and allocation values together.
      */
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void saveAssignmentsForDate(DailyWorkAssignmentDTO dto) {
         final LocalDate date = Objects.requireNonNull(dto.getDate(), "date is required");
+        concurrency.requireRevision(dto.getExpectedRevision(), concurrency.lockDay(date));
+        concurrency.editable(date);
         if (dto.isAllocationsRepeated()) {
             throw new AllocationValidationException(List.of(new AllocationErrorDTO(
                     null, null, null, "DUPLICATE_FIELD",
@@ -223,6 +227,8 @@ public class WorkAssignmentServiceImpl implements WorkAssignmentService {
         if (!toSave.isEmpty()) {
             workAssignmentRepo.saveAll(toSave);
         }
+
+        concurrency.bump(date);
 
         // --- 5) OVERTIME: idempotent (NO deleteAllByDate); unchanged semantics
         // Delete rows that exist for this date but are now absent (or zeroed) in the payload

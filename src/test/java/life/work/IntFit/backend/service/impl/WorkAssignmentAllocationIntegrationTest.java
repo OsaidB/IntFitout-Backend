@@ -46,6 +46,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @ActiveProfiles("test")
 class WorkAssignmentAllocationIntegrationTest {
 
+    // These legacy full-context tests isolate allocation/rollback behavior. New MySQL-only
+    // guards and revision/payroll races are exercised by the guarded MySQL reporting suite.
+    // Do not create reporting tables or infer any datasource in these allocation fixtures.
+    @org.springframework.boot.test.mock.mockito.MockBean
+    private life.work.IntFit.backend.service.AssignmentConcurrency assignmentConcurrency;
+
+
     private static final LocalDate DAY = LocalDate.of(2026, 9, 10);
     private static final String MONTH = "2026-09";
     private static final LocalDate MONTH_START = LocalDate.of(2026, 9, 1);

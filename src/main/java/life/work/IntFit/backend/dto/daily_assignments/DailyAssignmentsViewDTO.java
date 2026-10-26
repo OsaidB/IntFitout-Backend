@@ -14,6 +14,7 @@ import java.util.List;
 public record DailyAssignmentsViewDTO(
         LocalDate date,
         List<WorkAssignmentDTO> assignments,
-        List<DailyOvertimeDTO> overtime
+        List<DailyOvertimeDTO> overtime,
+        long revision
 ) {
 }

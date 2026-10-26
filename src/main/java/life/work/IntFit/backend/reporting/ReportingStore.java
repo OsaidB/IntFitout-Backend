@@ -27,6 +27,7 @@ public interface ReportingStore {
     List<Request> requests(int limit);
     List<Site> sites(String requestId);
     void addSite(Site site);
+    default boolean reviewExists(String requestId) { return false; }
     void resolveSite(String requestId,long entryId,long masterId,String key,java.time.Instant at);
     List<Coworker> mentions(String requestId);
     void addMention(Coworker coworker);

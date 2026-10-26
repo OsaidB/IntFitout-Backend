@@ -244,3 +244,8 @@ Updated files:
 - `src/test/resources/reporting/mysql-legacy-baseline.sql`.
 
 Branch remains `master`, HEAD `9c1c753cd64b568ec86b688bf2f359e1cb9683b6`. All batch changes remain uncommitted, undeployed and unsent. The separate pre-existing application.properties modification remains as it was.
+
+
+## Report review and assignment approval (004)
+
+The earlier batch sections describe the pre-review baseline. For the new review UI, protected APIs, required assignment revisions/payroll guards, manual **004 only** deployment sequence and current verification, use [Worker-report review operating guide](whatsapp-report-review.md). Migrations 001–003 and the live reporting/sending behavior remain unchanged.

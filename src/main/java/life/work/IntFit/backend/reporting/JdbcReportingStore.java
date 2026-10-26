@@ -83,6 +83,7 @@ public class JdbcReportingStore implements ReportingStore {
     @Override public void addSite(Site s) {
         jdbc.update("INSERT INTO whatsapp_report_sites(request_id,entry_id,site_id,label,original_description) VALUES(?,?,?,?,?)", s.requestId(),s.entryId(),s.siteId(),s.label(),s.originalDescription());
     }
+    @Override public boolean reviewExists(String id) { return Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM whatsapp_report_reviews WHERE request_id=?)",Boolean.class,id)); }
     @Override public void resolveSite(String requestId,long entry,long master,String key,Instant at) {
         int changed=jdbc.update("UPDATE whatsapp_report_sites SET resolved_master_id=?,resolution_key=?,resolved_at=? WHERE request_id=? AND entry_id=? AND site_id IS NULL AND resolved_master_id IS NULL",master,key,ts(at),requestId,entry);
         if(changed!=1) throw new ReportingProblem(409,"Entry resolution conflicts with persisted state.");

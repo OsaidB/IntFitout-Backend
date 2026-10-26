@@ -14,6 +14,11 @@ public class PublicInformationController {
 
     private static final MediaType HTML_UTF8 = new MediaType(MediaType.TEXT_HTML, StandardCharsets.UTF_8);
 
+    @GetMapping(value = "/about", produces = "text/html;charset=UTF-8")
+    public ResponseEntity<Resource> about() {
+        return html("static/about.html");
+    }
+
     @GetMapping(value = "/privacy", produces = "text/html;charset=UTF-8")
     public ResponseEntity<Resource> privacy() {
         return html("static/privacy.html");

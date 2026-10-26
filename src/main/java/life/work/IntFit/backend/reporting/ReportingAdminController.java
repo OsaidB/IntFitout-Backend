@@ -101,19 +101,10 @@ public class ReportingAdminController {
         });
     }
     private ResponseEntity<?> guarded(HttpServletRequest http,Supplier<?> operation) {
-        // No query-string overrides or query-string credentials on these routes (list limit is the one exception).
-        if (!settings.adminConfigured()) return error(503,"Reporting administration credential is not configured.");
-        List<String> headers=Collections.list(http.getHeaders("X-WhatsApp-Reporting-Admin-Secret"));
-        if (headers.size()!=1 || !settings.authorized(headers.get(0))) return error(403,"Reporting administration authorization rejected.");
-        if (http.getQueryString()!=null && !(http.getMethod().equals("GET") && http.getRequestURI().endsWith("/requests")
-                && http.getParameterMap().keySet().equals(Set.of("limit")) && http.getParameterValues("limit").length==1))
-            return error(400,"Unexpected query parameters.");
-        try { return ResponseEntity.ok().header("Cache-Control","no-store").body(operation.get()); }
-        catch (ReportingProblem e) { return error(e.status,e.getMessage()); }
-        catch (DuplicateKeyException e) { return error(409,"A reporting number or record already exists. Inspect existing configuration."); }
-        catch (DataAccessException e) { return error(503,"Reporting storage unavailable; inspect schema and server health. No send retry was requested."); }
-        catch (RuntimeException e) { return error(503,"Reporting operation could not be completed. Inspect persisted state before further action."); }
+        Set<String> allowed=http.getMethod().equals("GET") && http.getRequestURI().endsWith("/requests") ? Set.of("limit"):Set.of();
+        return new ReportingAdminGuard(settings).execute(http,allowed,operation);
     }
+
     private static void fields(JsonNode body,Set<String> allowed) {
         if (body==null || !body.isObject()) throw new ReportingProblem(400,"A JSON object is required.");
         Iterator<String> names=body.fieldNames();

@@ -42,6 +42,7 @@ public class ReportingResolutionService {
             Request r=store.request(requestId);
             if(r==null || r.workerId()!=worker) throw new ReportingProblem(404,"Reporting request not found.");
             if(r.submittedAt()==null) throw new ReportingProblem(409,"Resolve Other entries after submission.");
+            if(store.reviewExists(requestId)) throw new ReportingProblem(409,"Approved reports cannot be resolved or changed.");
             Site s=store.sites(requestId).stream().filter(x -> x.entryId()==entryId).findFirst().orElseThrow(() -> new ReportingProblem(404,"Report entry not found."));
             if(s.siteId()!=null) throw new ReportingProblem(409,"Only Other entries can be resolved.");
             if(s.resolvedMasterId()!=null) {

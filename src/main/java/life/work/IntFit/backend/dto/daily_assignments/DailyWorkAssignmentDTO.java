@@ -19,6 +19,9 @@ import java.util.List;
 public class DailyWorkAssignmentDTO {
     private LocalDate date;
 
+    /** Required optimistic revision returned by GET /day. */
+    private Long expectedRevision;
+
     /** Simple per-site assignments (no start/end times). */
     private List<SimpleAssignmentDTO> assignments;
 

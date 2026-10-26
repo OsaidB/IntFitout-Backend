@@ -24,6 +24,7 @@ public class PayrollService {
     private final PayrollAdjustmentRepository adjRepo;
     private final WorkAssignmentRepository assignmentRepo;
     private final PayrollMapper mapper;
+    private final AssignmentConcurrency concurrency;
 
     // Helper: start Saturday, end Thursday
     public static LocalDate[] satThu(LocalDate anchor) {
@@ -33,10 +34,11 @@ public class PayrollService {
         return new LocalDate[]{ start, end };
     }
 
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public PayrollWeekDTO generateOrLoad(LocalDate anchor) {
         var range = satThu(anchor);
         LocalDate start = range[0], end = range[1];
+        concurrency.lockWeek(start);
 
         // 1) Load or create the week shell
         PayrollWeek week = weekRepo.findByWeekStart(start).orElseGet(() -> {
@@ -131,8 +133,9 @@ public class PayrollService {
         }
     }
 
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public PayrollWeekDTO addAdjustment(Long weekId, Long lineId, double amount, String note) {
+        concurrency.lockPayroll(weekId);
         if (amount == 0.0) throw new BadRequestException("Amount must be non-zero");
 
         var week = weekRepo.findById(weekId)
@@ -164,8 +167,9 @@ public class PayrollService {
         return mapper.toDTO(weekRepo.saveAndFlush(week));
     }
 
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public PayrollWeekDTO setOtOverride(Long weekId, Long lineId, Double hours, String note) {
+        concurrency.lockPayroll(weekId);
         var week = weekRepo.findById(weekId).orElseThrow();
         if (week.getStatus() != PayrollWeek.Status.DRAFT) {
             throw new ConflictException("Week is not editable: " + week.getStatus());
@@ -188,9 +192,11 @@ public class PayrollService {
         return mapper.toDTO(weekRepo.saveAndFlush(week));
     }
 
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public PayrollWeekDTO finalizeWeek(Long weekId) {
+        concurrency.lockPayroll(weekId);
         var week = weekRepo.findById(weekId).orElseThrow();
+        if (week.getStatus() != PayrollWeek.Status.DRAFT) return mapper.toDTO(week);
 
         LocalDate start = week.getWeekStart();
         LocalDate end   = week.getWeekEnd();

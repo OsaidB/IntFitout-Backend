@@ -1,5 +1,8 @@
 -- Representative legacy schema from the existing entity mappings. Synthetic fixtures only.
 -- Exclusively used AFTER the per-run disposable-container guard has been checked.
+DROP TABLE IF EXISTS whatsapp_report_reviews;
+DROP TABLE IF EXISTS assignment_day_revisions;
+DROP TABLE IF EXISTS assignment_week_guards;
 DROP TABLE IF EXISTS whatsapp_report_outbound;
 DROP TABLE IF EXISTS whatsapp_daily_members;
 DROP TABLE IF EXISTS whatsapp_daily_runs;

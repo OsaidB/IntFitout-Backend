@@ -107,4 +107,8 @@ public class WorkAssignmentController {
         workAssignmentService.saveAssignmentsForDate(dto);
         return ResponseEntity.noContent().build();
     }
+    @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
+    public ResponseEntity<?> conflict(org.springframework.web.server.ResponseStatusException e) {
+        return ResponseEntity.status(e.getStatusCode()).body(java.util.Map.of("message",e.getReason()==null?"Assignment write rejected":e.getReason()));
+    }
 }

@@ -118,7 +118,7 @@ class ReportingMySqlIntegrationTest {
         // One actual legacy entity, explicit datasource, schema generation off. No component scanning.
         factory=new LocalContainerEntityManagerFactoryBean();factory.setDataSource(dataSource);
         factory.setPersistenceUnitName("disposable-reporting-validation");
-        factory.setManagedTypes(PersistenceManagedTypes.of(TeamMember.class.getName(),MasterWorksite.class.getName(),Worksite.class.getName(),WorksiteContact.class.getName(),Contact.class.getName()));
+        factory.setManagedTypes(PersistenceManagedTypes.of(TeamMember.class.getName(),MasterWorksite.class.getName(),Worksite.class.getName(),WorksiteContact.class.getName(),Contact.class.getName(),life.work.IntFit.backend.model.entity.WorkAssignment.class.getName(),life.work.IntFit.backend.model.entity.WorkAssignmentOvertime.class.getName(),life.work.IntFit.backend.model.entity.PayrollWeek.class.getName(),life.work.IntFit.backend.model.entity.PayrollLine.class.getName(),life.work.IntFit.backend.model.entity.PayrollAdjustment.class.getName()));
         factory.setJpaVendorAdapter(new HibernateJpaVendorAdapter());
         factory.setJpaPropertyMap(Map.of("hibernate.hbm2ddl.auto","none","hibernate.show_sql","false",
                 "hibernate.jdbc.time_zone","UTC","hibernate.physical_naming_strategy","org.hibernate.boot.model.naming.CamelCaseToUnderscoresNamingStrategy"));
@@ -148,6 +148,7 @@ class ReportingMySqlIntegrationTest {
             ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/001-whatsapp-reporting.sql"));
             ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/002-whatsapp-reporting-other-and-nicknames.sql"));
             ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/003-whatsapp-daily-runs.sql"));
+            ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/004-whatsapp-report-review.sql"));
         }
     }
     private void configured() throws Exception {
@@ -231,7 +232,7 @@ class ReportingMySqlIntegrationTest {
         assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM team_members WHERE whatsapp_reporting_eligible OR whatsapp_number IS NOT NULL",Integer.class));
         assertTrue(store.selectableSites().isEmpty());assertEquals(0,count("whatsapp_report_requests"));
         assertThrows(ReportingProblem.class,this::initiate);assertEquals(0,sends.get());
-        assertEquals(5,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE 'whatsapp_report_%'",Integer.class));
+        assertEquals(6,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE 'whatsapp_report_%'",Integer.class));
     }
     @Test void existingJpaWorkerUpdatesPreserveTheNewExplicitSetupFields() throws Exception {
         configured();TeamMemberRepository repo=new JpaRepositoryFactory(SharedEntityManagerCreator.createSharedEntityManager(emf)).getRepository(TeamMemberRepository.class);
@@ -445,7 +446,10 @@ class ReportingMySqlIntegrationTest {
         String submitted=UUID.randomUUID().toString();
         jdbc.update("INSERT INTO whatsapp_report_requests(id,worker_id,recipient,phone_id,work_date,step,revision,outcome,created_at,submitted_at) VALUES(?,8,'972599000008','123400007',?,'SUBMITTED',5,'WORKED',?,?)",submitted,DAY,java.sql.Timestamp.from(clock.instant()),java.sql.Timestamp.from(clock.instant()));
         jdbc.update("INSERT INTO whatsapp_report_sites VALUES(?,12,'Submitted snapshot')",submitted);jdbc.update("INSERT INTO whatsapp_report_coworkers VALUES(?,12,7,'Submitted mention')",submitted);
-        try(Connection c=dataSource.getConnection()){ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/002-whatsapp-reporting-other-and-nicknames.sql"));ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/003-whatsapp-daily-runs.sql"));}
+        try(Connection c=dataSource.getConnection()){ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/002-whatsapp-reporting-other-and-nicknames.sql"));ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/003-whatsapp-daily-runs.sql"));
+            ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/004-whatsapp-report-review.sql"));}
+        assertEquals("AWAITING_REVIEW",reviewService().detail(submitted).report().reviewStatus());
+        assertEquals("DRAFT",reviewService().detail(id).report().reviewStatus());
         service.configureWorker(7,true,"970599000007");service.configureWorker(8,true,"972599000008");
         assertEquals("SUBMITTED",service.report(submitted).step());assertEquals("Submitted snapshot",service.report(submitted).sites().getFirst().label());assertEquals(12,service.report(submitted).coworkers().getFirst().entryId());
         assertEquals(payload,current(id).payload());assertEquals(11,service.report(id).sites().getFirst().entryId());assertEquals(11,service.report(id).coworkers().getFirst().entryId());assertEquals("Original snapshot",service.report(id).sites().getFirst().label());
@@ -547,7 +551,8 @@ class ReportingMySqlIntegrationTest {
         String id=UUID.randomUUID().toString(),out=UUID.randomUUID().toString();String payload="{\"synthetic\":\"preserve exact issued payload\"}";
         jdbc.update("INSERT INTO whatsapp_report_requests(id,worker_id,recipient,phone_id,work_date,step,created_at) VALUES(?,7,'970599000007','123400007',?,'START',?)",id,DAY,java.sql.Timestamp.from(clock.instant()));
         jdbc.update("INSERT INTO whatsapp_report_outbound(id,request_id,revision,kind,payload,state,meta_id,created_at) VALUES(?,?,0,'TEMPLATE',?,'ACCEPTED','wamid.preserveThird',?)",out,id,payload,java.sql.Timestamp.from(clock.instant()));
-        try(Connection c=dataSource.getConnection()) {ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/003-whatsapp-daily-runs.sql"));}
+        try(Connection c=dataSource.getConnection()) {ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/003-whatsapp-daily-runs.sql"));
+            ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/004-whatsapp-report-review.sql"));}
         Outbound migrated=store.peekOutbound(out);assertEquals(payload,migrated.payload());assertEquals("970599000007",migrated.recipient());assertEquals("123400007",migrated.phoneId());assertEquals("WORKER",migrated.recipientType());assertEquals("wamid.preserveThird",migrated.metaId());assertNull(migrated.runId());
         assertEquals(0,count("whatsapp_daily_runs"));assertEquals(0,count("whatsapp_daily_members"));assertFalse(store.transaction(() -> store.lockWorker(7)).eligible());
     }
@@ -622,5 +627,222 @@ class ReportingMySqlIntegrationTest {
             String requested=failAt.get();
             if(stage.equals(requested) && failAt.compareAndSet(requested,null))jdbc.update("INSERT INTO reporting_forced_failure_missing_table(id) VALUES(1)");
         }
+    }
+
+    // Approval fixtures use only the fresh guarded database above. No Spring context or network.
+    private static final LocalDate REVIEW_DAY=DAY.plusDays(7);
+    private ReportReviewService reviewService() {return new ReportReviewService(jdbc,store,new life.work.IntFit.backend.service.AssignmentConcurrency(jdbc),new ObjectMapper().findAndRegisterModules(),clock,manager);}
+    private <T> T reviewTx(Supplier<T> work) {
+        var tx=new org.springframework.transaction.support.TransactionTemplate(manager);
+        tx.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);
+        return tx.execute(t->work.get());
+    }
+    private String reviewFixture(boolean existing,String outcome) throws Exception {
+        configured();financialSnapshot=null;
+        if(existing) {
+            jdbc.update("INSERT INTO work_assignments(team_member_id,master_worksite_id,date,regular_hours_override,overtime_hours_override) SELECT team_member_id,master_worksite_id,?,regular_hours_override,overtime_hours_override FROM work_assignments WHERE date=?",REVIEW_DAY,DAY);
+            jdbc.update("INSERT INTO work_assignment_overtime(team_member_id,date,overtime_hours) SELECT team_member_id,?,overtime_hours FROM work_assignment_overtime WHERE date=?",REVIEW_DAY,DAY);
+        }
+        String id=UUID.randomUUID().toString();
+        jdbc.update("INSERT INTO whatsapp_report_requests(id,worker_id,recipient,phone_id,work_date,step,revision,created_at,submitted_at,outcome) VALUES(?,7,'970599000007','123400007',?,'SUBMITTED',9,?,?,?)",id,REVIEW_DAY,java.sql.Timestamp.from(clock.instant()),java.sql.Timestamp.from(clock.instant()),outcome);
+        if(outcome.equals("WORKED")){store.addSite(new Site(id,11,"original nickname"));store.addSite(new Site(id,12,"second original"));store.addMention(new Coworker(id,11,8,"original coworker"));}
+        return id;
+    }
+    private ReportReviewService.Decision decision(long revision,String outcome,List<Long> sites,List<Long> included,String ot,boolean reset,boolean remove) {
+        var auto=new life.work.IntFit.backend.dto.daily_assignments.CategoryAllocationDTO("AUTO",null);
+        return new ReportReviewService.Decision(revision,outcome,sites,included,ot==null?null:new java.math.BigDecimal(ot),reset?auto:null,reset?auto:null,remove);
+    }
+    private ReportReviewService.Decision worked(long revision,List<Long> sites,boolean reset) {return decision(revision,"WORKED",sites,List.of(11L,12L),null,reset,false);}
+    private List<Map<String,Object>> answers(String id) {return jdbc.queryForList("SELECT step,revision,outcome,submitted_at FROM whatsapp_report_requests WHERE id=?",id);}
+    private List<Map<String,Object>> untouched() {
+        var rows=new ArrayList<>(jdbc.queryForList("SELECT * FROM work_assignments WHERE team_member_id<>7 OR date<>? ORDER BY id",REVIEW_DAY));
+        rows.addAll(jdbc.queryForList("SELECT * FROM work_assignment_overtime WHERE team_member_id<>7 OR date<>? ORDER BY id",REVIEW_DAY));
+        for(String table:List.of("payroll_week","payroll_line","payroll_adjustment"))rows.addAll(jdbc.queryForList("SELECT * FROM "+table+" ORDER BY id"));return rows;
+    }
+    private life.work.IntFit.backend.service.impl.WorkAssignmentServiceImpl planner() {
+        var f=new JpaRepositoryFactory(SharedEntityManagerCreator.createSharedEntityManager(emf));
+        return new life.work.IntFit.backend.service.impl.WorkAssignmentServiceImpl(f.getRepository(WorkAssignmentRepository.class),f.getRepository(MasterWorksiteRepository.class),f.getRepository(TeamMemberRepository.class),f.getRepository(WorkAssignmentOvertimeRepository.class),new life.work.IntFit.backend.mapper.WorkAssignmentMapper(),new life.work.IntFit.backend.service.AssignmentConcurrency(jdbc));
+    }
+    private life.work.IntFit.backend.dto.daily_assignments.SimpleAssignmentDTO reviewPair(long member,long site) {var a=new life.work.IntFit.backend.dto.daily_assignments.SimpleAssignmentDTO();a.setTeamMemberId(member);a.setMasterWorksiteId(site);return a;}
+    private life.work.IntFit.backend.dto.daily_assignments.DailyWorkAssignmentDTO emptyDay(Long revision) {
+        var d=new life.work.IntFit.backend.dto.daily_assignments.DailyWorkAssignmentDTO();d.setDate(REVIEW_DAY);d.setExpectedRevision(revision);d.setAssignments(List.of());d.setOvertime(List.of());return d;
+    }
+    private life.work.IntFit.backend.service.PayrollService payroll() {
+        var f=new JpaRepositoryFactory(SharedEntityManagerCreator.createSharedEntityManager(emf));
+        return new life.work.IntFit.backend.service.PayrollService(f.getRepository(PayrollWeekRepository.class),f.getRepository(PayrollLineRepository.class),f.getRepository(PayrollAdjustmentRepository.class),f.getRepository(WorkAssignmentRepository.class),Mappers.getMapper(life.work.IntFit.backend.mapper.PayrollMapper.class),new life.work.IntFit.backend.service.AssignmentConcurrency(jdbc));
+    }
+    @Test void reviewMigrationPreservesLegacyAndDefaultsExistingSubmissions() throws Exception {
+        String id=reviewFixture(false,"WORKED");
+        assertEquals("AWAITING_REVIEW",reviewService().detail(id).report().reviewStatus());
+        assertEquals(0,reviewService().detail(id).revision());assertNull(reviewService().detail(id).approval());
+        assertEquals(3,count("work_assignments"));assertEquals(0,count("whatsapp_report_reviews"));
+        assertEquals(1,reviewService().list(REVIEW_DAY,"AWAITING_REVIEW",0,30).total());
+        assertEquals(0,reviewService().list(REVIEW_DAY,"APPROVED",0,30).total());
+        assertEquals(0,reviewService().list(REVIEW_DAY,"DRAFT",0,30).total());
+        assertEquals(3,reviewService().masters("",0).size());
+    }
+    @Test void reviewPaginationIncludesSubmissionsBeyondOneHundred() throws Exception {
+        reviewFixture(false,"WORKED");
+        for(int i=1;i<=106;i++)jdbc.update("INSERT INTO whatsapp_report_requests(id,worker_id,recipient,phone_id,work_date,step,revision,created_at,submitted_at,outcome) VALUES(?,7,'970599000007','123400007',?,'SUBMITTED',1,?,?,'DID_NOT_WORK')",UUID.randomUUID().toString(),REVIEW_DAY.minusDays(i),java.sql.Timestamp.from(clock.instant()),java.sql.Timestamp.from(clock.instant()));
+        assertEquals(107,reviewService().list(null,"ALL",0,50).total());assertEquals(7,reviewService().list(null,"AWAITING_REVIEW",2,50).items().size());
+        jdbc.update("UPDATE whatsapp_report_requests SET submitted_at=NULL,step='SITES' WHERE work_date=?",REVIEW_DAY.minusDays(1));
+        assertEquals(1,reviewService().list(null,"DRAFT",0,50).total());
+        assertEquals(106,reviewService().list(null,"AWAITING_REVIEW",0,50).total());
+    }
+    @Test void reviewWorkedMatchingPreservesRowsOvertimeCustomAnswersCoworkersAndPayroll() throws Exception {
+        String id=reviewFixture(true,"WORKED");var other=untouched();var original=answers(id);var sites=store.sites(id);var coworkers=store.mentions(id);var before=reviewService().detail(id).existing();
+        var result=reviewService().approve(id,worked(0,List.of(11L,12L),false));
+        assertEquals(before,result.existing());assertEquals(0,result.revision());assertEquals("APPROVED",result.report().reviewStatus());
+        assertEquals(other,untouched());assertEquals(original,answers(id));assertEquals(sites,store.sites(id));assertEquals(coworkers,store.mentions(id));
+        assertEquals(0,reviewService().list(null,"AWAITING_REVIEW",0,30).total());assertEquals(1,reviewService().list(null,"APPROVED",0,30).total());
+        assertEquals("SHARED_REVIEW_KEY",result.approval().path("reviewerKind").asText());
+    }
+    @Test void reviewChangedSitesRequireExplicitAllocationReconciliation() throws Exception {
+        String id=reviewFixture(true,"WORKED");var other=untouched();
+        assertThrows(life.work.IntFit.backend.exception.error.AllocationValidationException.class,()->reviewService().approve(id,worked(0,List.of(11L,13L),false)));
+        assertEquals(0,count("whatsapp_report_reviews"));
+        var result=reviewService().approve(id,worked(0,List.of(11L,13L),true));
+        assertEquals(List.of(11L,13L),result.existing().assignments().stream().map(ReportReviewService.Row::masterWorksiteId).sorted().toList());
+        assertEquals("1.5",result.existing().overtimeHours());assertEquals(other,untouched());assertEquals(1,result.revision());
+    }
+    @Test void reviewDidNotWorkNoopAndExplicitRemoval() throws Exception {
+        String id=reviewFixture(true,"DID_NOT_WORK");var other=untouched();
+        assertThrows(ReportingProblem.class,()->reviewService().approve(id,decision(0,"DID_NOT_WORK",List.of(),List.of(),null,false,false)));
+        assertThrows(ReportingProblem.class,()->reviewService().approve(id,decision(0,"DID_NOT_WORK",List.of(),List.of(),null,true,true)));
+        assertThrows(life.work.IntFit.backend.exception.error.AllocationValidationException.class,()->reviewService().approve(id,decision(0,"DID_NOT_WORK",List.of(),List.of(),"0",false,true)));
+        var result=reviewService().approve(id,decision(0,"DID_NOT_WORK",List.of(),List.of(),"0",true,true));
+        assertTrue(result.existing().assignments().isEmpty());assertFalse(result.existing().hasOvertimeRecord());assertEquals(other,untouched());
+    }
+    @Test void reviewEmptyDidNotWorkNoopAndSendingPaused() throws Exception {
+        String id=reviewFixture(false,"DID_NOT_WORK");env.put("WHATSAPP_REPORTING_ENABLED","false");jdbc.update("UPDATE team_members SET whatsapp_reporting_eligible=FALSE,whatsapp_number=NULL WHERE id=7");
+        var result=reviewService().approve(id,decision(0,"DID_NOT_WORK",List.of(),List.of(),null,false,false));
+        assertEquals(0,result.revision());assertNotNull(result.approval());assertEquals(0,sends.get());
+    }
+    @Test void reviewOtherResolutionDeduplicatesMastersWithoutChangingEntries() throws Exception {
+        String id=reviewFixture(false,"WORKED");store.addSite(new Site(id,90,null,"Other","original description",null,null,null,null));store.addSite(new Site(id,91,null,"Other","second description",null,null,null,null));
+        var d=decision(0,"WORKED",List.of(11L,12L),List.of(11L,12L,90L,91L),null,false,false);
+        assertThrows(ReportingProblem.class,()->reviewService().approve(id,d));
+        resolutions().resolve(id,90,11L,null);resolutions().resolve(id,91,11L,null);
+        var entries=store.sites(id);var result=reviewService().approve(id,d);
+        assertEquals(2,result.existing().assignments().size());assertEquals(entries,store.sites(id));
+        assertThrows(ReportingProblem.class,()->resolutions().resolve(id,90,11L,null));
+    }
+    @Test void reviewDeletedMasterDraftInvalidAllocationsRejectWithoutWrites() throws Exception {
+        String id=reviewFixture(false,"WORKED");var snapshot=financialState();
+        assertThrows(ReportingProblem.class,()->reviewService().approve(id,worked(0,List.of(9999L),false)));
+        store.addSite(new Site(id,90,9999L,"deleted",null,null,null,null,null));
+        assertThrows(ReportingProblem.class,()->reviewService().approve(id,decision(0,"WORKED",List.of(11L),List.of(90L),null,false,false)));
+        var custom=new life.work.IntFit.backend.dto.daily_assignments.CategoryAllocationDTO("CUSTOM",List.of(new life.work.IntFit.backend.dto.daily_assignments.SiteHoursDTO(11L,new java.math.BigDecimal("7"))));
+        assertThrows(life.work.IntFit.backend.exception.error.AllocationValidationException.class,()->reviewService().approve(id,new ReportReviewService.Decision(0L,"WORKED",List.of(11L),List.of(11L),null,custom,null,false)));
+        jdbc.update("UPDATE whatsapp_report_requests SET step='SITES',submitted_at=NULL WHERE id=?",id);
+        assertThrows(ReportingProblem.class,()->reviewService().approve(id,worked(0,List.of(11L),false)));assertEquals(snapshot,financialState());assertEquals(0,count("whatsapp_report_reviews"));
+    }
+    @Test void reviewEvidenceFailureRollsBackAssignmentAndRevision() throws Exception {
+        String id=reviewFixture(false,"WORKED");var before=financialState();
+        jdbc.execute("ALTER TABLE whatsapp_report_reviews ADD CONSTRAINT ck_synthetic_failure CHECK(day_revision<0)");
+        try{assertThrows(DataAccessException.class,()->reviewService().approve(id,decision(0,"WORKED",List.of(11L),List.of(11L,12L),"2",false,false)));}finally{jdbc.execute("ALTER TABLE whatsapp_report_reviews DROP CHECK ck_synthetic_failure");}
+        assertEquals(before,financialState());assertEquals(0,new life.work.IntFit.backend.service.AssignmentConcurrency(jdbc).revision(REVIEW_DAY));assertEquals(0,count("whatsapp_report_reviews"));
+        assertNotNull(reviewService().approve(id,worked(0,List.of(11L),false)).approval());
+    }
+    @Test void reviewIdenticalRetriesAndConflictingRepeatsSurviveServiceRecreation() throws Exception {
+        String id=reviewFixture(false,"WORKED");var d=worked(0,List.of(11L,12L),false);var first=reviewService().approve(id,d);var snapshot=financialState();
+        recreateServices();var retried=reviewService().approve(id,d);assertEquals(first.approval(),retried.approval());assertEquals(snapshot,financialState());
+        assertEquals(REVIEW_DAY,retried.report().workDate());assertThrows(ReportingProblem.class,()->reviewService().approve(id,worked(0,List.of(11L),false)));assertEquals(1,count("whatsapp_report_reviews"));
+    }
+    @Test void reviewConcurrentApprovalsCommitOneDecision() throws Exception {
+        String id=reviewFixture(false,"WORKED");var pool=Executors.newFixedThreadPool(2);var barrier=new CyclicBarrier(2);
+        try{List<Future<ReportReviewService.Detail>> results=new ArrayList<>();for(int i=0;i<2;i++)results.add(pool.submit(()->{barrier.await();return reviewService().approve(id,worked(0,List.of(11L),false));}));for(var f:results)assertNotNull(f.get(20,TimeUnit.SECONDS).approval());}
+        finally{pool.shutdownNow();}assertEquals(1,count("whatsapp_report_reviews"));assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM work_assignments WHERE date=?",Integer.class,REVIEW_DAY));
+    }
+    @Test void reviewApprovalMakesPreviouslyEmptyPlannerStale() throws Exception {
+        String id=reviewFixture(false,"WORKED");var d=emptyDay(0L);reviewService().approve(id,worked(0,List.of(11L),false));
+        assertThrows(org.springframework.web.server.ResponseStatusException.class,()->reviewTx(()->{planner().saveAssignmentsForDate(d);return null;}));
+        assertEquals(1,reviewService().detail(id).existing().assignments().size());
+    }
+    @Test void reviewPlannerMakesApprovalStaleEvenWhenDayWasEmpty() throws Exception {
+        String id=reviewFixture(false,"WORKED");reviewTx(()->{planner().saveAssignmentsForDate(emptyDay(0L));return null;});
+        assertThrows(org.springframework.web.server.ResponseStatusException.class,()->reviewService().approve(id,worked(0,List.of(11L),false)));assertEquals(0,count("whatsapp_report_reviews"));
+        assertEquals(1,reviewService().detail(id).revision());
+    }
+    @Test void reviewMissingPlannerRevisionNeverBypassesProtection() throws Exception {
+        reviewFixture(false,"WORKED");assertThrows(org.springframework.web.server.ResponseStatusException.class,()->reviewTx(()->{planner().saveAssignmentsForDate(emptyDay(null));return null;}));
+        var day=reviewTx(()->planner().getDay(REVIEW_DAY));assertEquals(0,day.revision());
+    }
+    @ParameterizedTest @ValueSource(strings={"FINALIZED","PAID"}) void reviewFrozenPayrollBlocksBothWriters(String status) throws Exception {
+        String id=reviewFixture(false,"WORKED");jdbc.update("INSERT INTO payroll_week(week_start,week_end,status) VALUES(?,?,?)",REVIEW_DAY.minusDays(5),REVIEW_DAY,status);
+        var snapshot=financialState();assertThrows(org.springframework.web.server.ResponseStatusException.class,()->reviewService().approve(id,worked(0,List.of(11L),false)));
+        assertThrows(org.springframework.web.server.ResponseStatusException.class,()->reviewTx(()->{planner().saveAssignmentsForDate(emptyDay(0L));return null;}));assertEquals(snapshot,financialState());
+    }
+    @Test void reviewPayrollFinalizationWaitsForApprovalAndSnapshotsCommittedRows() throws Exception {
+        String id=reviewFixture(false,"WORKED");var gate=new CountDownLatch(1);var release=new CountDownLatch(1);var pool=Executors.newFixedThreadPool(2);
+        try{
+            var approval=pool.submit(()->reviewTx(()->{new life.work.IntFit.backend.service.AssignmentConcurrency(jdbc).lockDay(REVIEW_DAY);gate.countDown();try{assertTrue(release.await(10,TimeUnit.SECONDS));}catch(Exception e){throw new RuntimeException(e);}return reviewService().approve(id,worked(0,List.of(11L),false));}));
+            assertTrue(gate.await(10,TimeUnit.SECONDS));
+            var finalize=pool.submit(()->reviewTx(()->{var p=payroll();var week=p.generateOrLoad(REVIEW_DAY);return p.finalizeWeek(week.getId());}));
+            Thread.sleep(150);assertFalse(finalize.isDone());release.countDown();assertNotNull(approval.get(20,TimeUnit.SECONDS).approval());var week=finalize.get(20,TimeUnit.SECONDS);
+            assertEquals("FINALIZED",jdbc.queryForObject("SELECT status FROM payroll_week WHERE id=?",String.class,week.getId()));assertEquals(240d,jdbc.queryForObject("SELECT base_wages FROM payroll_line WHERE payroll_week_id=? AND team_member_id=7",Double.class,week.getId()));
+        }finally{release.countDown();pool.shutdownNow();}
+    }
+    @Test void reviewApprovalWaitsForFinalizationThenRejectsWithoutWriting() throws Exception {
+        String id=reviewFixture(false,"WORKED");var gate=new CountDownLatch(1);var release=new CountDownLatch(1);var pool=Executors.newFixedThreadPool(2);
+        try{
+            var finalization=pool.submit(()->reviewTx(()->{var p=payroll();var week=p.generateOrLoad(REVIEW_DAY);gate.countDown();try{assertTrue(release.await(10,TimeUnit.SECONDS));}catch(Exception e){throw new RuntimeException(e);}return p.finalizeWeek(week.getId());}));
+            assertTrue(gate.await(10,TimeUnit.SECONDS));var approval=pool.submit(()->reviewService().approve(id,worked(0,List.of(11L),false)));
+            Thread.sleep(150);assertFalse(approval.isDone());release.countDown();finalization.get(20,TimeUnit.SECONDS);assertThrows(ExecutionException.class,()->approval.get(20,TimeUnit.SECONDS));assertEquals(0,count("whatsapp_report_reviews"));
+        }finally{release.countDown();pool.shutdownNow();}
+    }
+    @Test void reviewProtectedMvcAndExactDecimalContract() throws Exception {
+        String id=reviewFixture(true,"WORKED");var mvc=MockMvcBuilders.standaloneSetup(new ReportReviewController(reviewService(),resolutions(),new ReportingSettings(env::get),new ObjectMapper().findAndRegisterModules())).build();
+        mvc.perform(get(BASE+"/reviews")).andExpect(status().isForbidden());
+        mvc.perform(get(BASE+"/reviews").header(ADMIN,env.get("WHATSAPP_REPORTING_ADMIN_SECRET"))).andExpect(status().isOk()).andExpect(jsonPath("$.items[0].workerName").value("Fixture worker seven"));
+        var d=worked(0,List.of(11L,12L),false);
+        mvc.perform(post(BASE+"/reviews/"+id+"/approve").header(ADMIN,env.get("WHATSAPP_REPORTING_ADMIN_SECRET")).contentType("application/json").content(mapper.writeValueAsBytes(d))).andExpect(status().isOk()).andExpect(jsonPath("$.existing.assignments[0].regularHoursOverride").value("5.000000000000000000000000000000"));
+    }
+
+    @Test void reviewConcurrentConflictingDecisionsCannotBothCommit() throws Exception {
+        String id=reviewFixture(false,"WORKED");
+        var errors=race(List.of(()->reviewService().approve(id,worked(0,List.of(11L),false)),()->reviewService().approve(id,worked(0,List.of(12L),false))));
+        assertEquals(1,errors.size());assertInstanceOf(ReportingProblem.class,errors.getFirst());assertEquals(1,count("whatsapp_report_reviews"));
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM work_assignments WHERE team_member_id=7 AND date=?",Integer.class,REVIEW_DAY));
+    }
+    @ParameterizedTest @ValueSource(booleans={false,true}) void reviewStaleProtectionAlsoCoversPopulatedDays(boolean plannerFirst) throws Exception {
+        String id=reviewFixture(true,"WORKED");
+        if(plannerFirst) {
+            var dto=emptyDay(0L);dto.setAssignments(List.of(reviewPair(7,11),reviewPair(7,12),reviewPair(8,11)));
+            dto.setOvertime(List.of(new life.work.IntFit.backend.dto.daily_assignments.OvertimeDTO(7L,new java.math.BigDecimal("1.5")),new life.work.IntFit.backend.dto.daily_assignments.OvertimeDTO(8L,new java.math.BigDecimal("2"))));
+            reviewTx(()->{planner().saveAssignmentsForDate(dto);return null;});
+            assertThrows(org.springframework.web.server.ResponseStatusException.class,()->reviewService().approve(id,worked(0,List.of(11L),true)));
+        } else {
+            reviewService().approve(id,worked(0,List.of(11L),true));
+            assertThrows(org.springframework.web.server.ResponseStatusException.class,()->reviewTx(()->{planner().saveAssignmentsForDate(emptyDay(0L));return null;}));
+        }
+    }
+    @ParameterizedTest @ValueSource(booleans={false,true}) void reviewPlannerAndApprovalUseTheSameLocksUnderContention(boolean plannerFirst) throws Exception {
+        String id=reviewFixture(false,"WORKED");var gate=new CountDownLatch(1);var release=new CountDownLatch(1);var pool=Executors.newFixedThreadPool(2);
+        try{
+            var first=pool.submit(()->reviewTx(()->{new life.work.IntFit.backend.service.AssignmentConcurrency(jdbc).lockDay(REVIEW_DAY);gate.countDown();try{assertTrue(release.await(10,TimeUnit.SECONDS));}catch(Exception e){throw new RuntimeException(e);}if(plannerFirst)planner().saveAssignmentsForDate(emptyDay(0L));else reviewService().approve(id,worked(0,List.of(11L),false));return null;}));
+            assertTrue(gate.await(10,TimeUnit.SECONDS));
+            var second=pool.submit(()->{if(plannerFirst)return reviewService().approve(id,worked(0,List.of(11L),false));return reviewTx(()->{planner().saveAssignmentsForDate(emptyDay(0L));return null;});});
+            Thread.sleep(150);assertFalse(second.isDone());release.countDown();first.get(20,TimeUnit.SECONDS);assertThrows(ExecutionException.class,()->second.get(20,TimeUnit.SECONDS));
+            assertEquals(plannerFirst?0:1,count("whatsapp_report_reviews"));
+        }finally{release.countDown();pool.shutdownNow();}
+    }
+
+    @Test void reviewDefaultOvertimePreservesZeroRecordUntilExplicitlyEdited() throws Exception {
+        String id=reviewFixture(false,"WORKED");
+        jdbc.update("INSERT INTO work_assignment_overtime(team_member_id,date,overtime_hours) VALUES(7,?,0)",REVIEW_DAY);
+        var result=reviewService().approve(id,worked(0,List.of(11L),false));
+        assertTrue(result.existing().hasOvertimeRecord());assertEquals("0",result.existing().overtimeHours());
+        assertEquals(1,jdbc.queryForObject("SELECT COUNT(*) FROM work_assignment_overtime WHERE team_member_id=7 AND date=?",Integer.class,REVIEW_DAY));
+    }
+
+    @Test void reviewExplicitOvertimeEditPreservesRegularCustomSplitAndOtherWorkers() throws Exception {
+        String id=reviewFixture(true,"WORKED");var other=untouched();
+        var auto=new life.work.IntFit.backend.dto.daily_assignments.CategoryAllocationDTO("AUTO",null);
+        var d=new ReportReviewService.Decision(0L,"WORKED",List.of(11L,12L),List.of(11L,12L),new java.math.BigDecimal("2"),null,auto,false);
+        var result=reviewService().approve(id,d);
+        assertEquals("2",result.existing().overtimeHours());assertEquals(other,untouched());
+        assertEquals(List.of(new java.math.BigDecimal("5"),new java.math.BigDecimal("3")),result.existing().assignments().stream().map(a->a.regularHoursOverride().stripTrailingZeros()).toList());
+        assertTrue(result.existing().assignments().stream().allMatch(a->a.overtimeHoursOverride()==null));
     }
 }
