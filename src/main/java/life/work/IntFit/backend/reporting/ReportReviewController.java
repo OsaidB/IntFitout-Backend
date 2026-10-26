@@ -33,18 +33,29 @@ public class ReportReviewController {
     @GetMapping("/reviews/{id}") public ResponseEntity<?> detail(HttpServletRequest h,@PathVariable String id) {
         return guard.execute(h,Set.of(),()->reviews.detail(id));
     }
+    @GetMapping("/reviews/{id}/coworkers/{worker}/day") public ResponseEntity<?> coworkerDay(HttpServletRequest h,@PathVariable String id,@PathVariable long worker) {
+        return guard.execute(h,Set.of(),()->reviews.coworkerDay(id,worker));
+    }
     @GetMapping("/review-masters") public ResponseEntity<?> masters(HttpServletRequest h) {
         return guard.execute(h,Set.of("q","page"),()->reviews.masters(param(h,"q",""),integer(h,"page",0)));
     }
     @PostMapping("/reviews/{id}/approve") public ResponseEntity<?> approve(HttpServletRequest h,@PathVariable String id,@RequestBody byte[] body) {
         return guard.execute(h,Set.of(),()-> {
-            JsonNode n=parse(body);fields(n,Set.of("expectedRevision","outcome","masterWorksiteIds","includedEntryIds","overtimeHours","regular","overtime","removeExistingConfirmed"));
+            JsonNode n=parse(body);fields(n,Set.of("expectedRevision","outcome","masterWorksiteIds","includedEntryIds","overtimeHours","regular","overtime","removeExistingConfirmed","coworkers"));
             if(!n.path("expectedRevision").isIntegralNumber()||!n.path("expectedRevision").canConvertToLong()||!n.path("outcome").isTextual()||!n.path("masterWorksiteIds").isArray()||!n.path("includedEntryIds").isArray()||!n.path("removeExistingConfirmed").isBoolean())invalid();
             for(String key:List.of("masterWorksiteIds","includedEntryIds"))for(JsonNode item:n.path(key))if(!item.isIntegralNumber()||!item.canConvertToLong())invalid();
             if(n.has("overtimeHours") && !n.get("overtimeHours").isNull() && !n.get("overtimeHours").isTextual() && !n.get("overtimeHours").isNumber())invalid();
-            for(String category:List.of("regular","overtime"))if(n.hasNonNull(category)) {
-                JsonNode c=n.get(category);fields(c,Set.of("mode","hours"));if(!c.path("mode").isTextual())invalid();
-                if(c.hasNonNull("hours")){if(!c.get("hours").isArray()||c.get("hours").size()>100)invalid();for(JsonNode item:c.get("hours")){fields(item,Set.of("masterWorksiteId","hours"));if(!item.path("masterWorksiteId").isIntegralNumber()||!item.path("masterWorksiteId").canConvertToLong()||(!item.path("hours").isNumber()&&!item.path("hours").isTextual()))invalid();}}
+            for(String category:List.of("regular","overtime"))if(n.hasNonNull(category))category(n.get(category));
+            if(n.hasNonNull("coworkers")) {
+                if(!n.get("coworkers").isArray()||n.get("coworkers").size()>50)invalid();
+                for(JsonNode c:n.get("coworkers")) {
+                    fields(c,Set.of("workerId","entryIds","overtimeHours","regular","overtime"));
+                    if(!c.path("workerId").isIntegralNumber()||!c.path("workerId").canConvertToLong())invalid();
+                    if(!c.path("entryIds").isArray()||c.path("entryIds").size()>100)invalid();
+                    for(JsonNode item:c.path("entryIds"))if(!item.isIntegralNumber()||!item.canConvertToLong())invalid();
+                    if(c.has("overtimeHours")&&!c.get("overtimeHours").isNull()&&!c.get("overtimeHours").isTextual()&&!c.get("overtimeHours").isNumber())invalid();
+                    for(String category:List.of("regular","overtime"))if(c.hasNonNull(category))category(c.get(category));
+                }
             }
             try{return reviews.approve(id,strict.treeToValue(n,ReportReviewService.Decision.class));}
             catch(com.fasterxml.jackson.core.JsonProcessingException e){throw new ReportingProblem(400,"Invalid approval decision.");}
@@ -60,6 +71,16 @@ public class ReportReviewController {
             }
             return resolutions.resolve(id,entry,master,create);
         });
+    }
+    private static void category(JsonNode c) {
+        fields(c,Set.of("mode","hours"));if(!c.path("mode").isTextual())invalid();
+        if(c.hasNonNull("hours")) {
+            if(!c.get("hours").isArray()||c.get("hours").size()>100)invalid();
+            for(JsonNode item:c.get("hours")) {
+                fields(item,Set.of("masterWorksiteId","hours"));
+                if(!item.path("masterWorksiteId").isIntegralNumber()||!item.path("masterWorksiteId").canConvertToLong()||(!item.path("hours").isNumber()&&!item.path("hours").isTextual()))invalid();
+            }
+        }
     }
     private JsonNode parse(byte[] body){try{if(body.length>65536)invalid();return strict.readTree(body);}catch(Exception e){throw new ReportingProblem(400,"Invalid review JSON.");}}
     private static void fields(JsonNode n,Set<String> allowed){if(n==null||!n.isObject())invalid();n.fieldNames().forEachRemaining(k->{if(!allowed.contains(k))invalid();});}

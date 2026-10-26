@@ -41,6 +41,51 @@ class ReportReviewControllerTest {
     void malformedDuplicateAndOverrideBodiesReject(String body) throws Exception {
         mvc.perform(post(BASE+"/reviews/"+ID+"/approve").header(HEADER,KEY).contentType("application/json").content(body)).andExpect(status().isBadRequest());verifyNoInteractions(reviews,resolution);
     }
+    private static String withCoworkers(String coworkers) {
+        return "{\"expectedRevision\":4,\"outcome\":\"WORKED\",\"masterWorksiteIds\":[11],\"includedEntryIds\":[11],"
+                + "\"removeExistingConfirmed\":false,\"coworkers\":" + coworkers + "}";
+    }
+    @ParameterizedTest @ValueSource(strings={
+        "[{\"workerId\":\"8\",\"entryIds\":[11]}]",
+        "[{\"workerId\":8,\"entryIds\":\"11\"}]",
+        "[{\"workerId\":8,\"entryIds\":[\"11\"]}]",
+        "[{\"workerId\":8,\"entryIds\":[11],\"teamMemberId\":9}]",
+        "[{\"workerId\":8,\"entryIds\":[11],\"overtimeHours\":true}]",
+        "[{\"workerId\":8,\"entryIds\":[11],\"regular\":{\"mode\":8}}]",
+        "[{\"workerId\":8,\"entryIds\":[11],\"regular\":{\"mode\":\"CUSTOM\",\"hours\":[{\"masterWorksiteId\":\"11\",\"hours\":\"8\"}]}}]",
+        "{\"workerId\":8}"})
+    void malformedCoworkerSelectionsRejectBeforePersistence(String coworkers) throws Exception {
+        mvc.perform(post(BASE+"/reviews/"+ID+"/approve").header(HEADER,KEY).contentType("application/json").content(withCoworkers(coworkers)))
+            .andExpect(status().isBadRequest());
+        verifyNoInteractions(reviews,resolution);
+    }
+    @Test void typedCoworkerSelectionReachesService() throws Exception {
+        String body=withCoworkers("[{\"workerId\":8,\"entryIds\":[11],\"overtimeHours\":\"1.5\",\"regular\":{\"mode\":\"AUTO\"}}]");
+        mvc.perform(post(BASE+"/reviews/"+ID+"/approve").header(HEADER,KEY).contentType("application/json").content(body)).andExpect(status().isOk());
+        var captor=org.mockito.ArgumentCaptor.forClass(ReportReviewService.Decision.class);
+        verify(reviews).approve(org.mockito.ArgumentMatchers.eq(ID),captor.capture());
+        var selections=captor.getValue().coworkers();
+        Assertions.assertEquals(1,selections.size());
+        Assertions.assertEquals(8L,selections.getFirst().workerId());
+        Assertions.assertEquals(java.util.List.of(11L),selections.getFirst().entryIds());
+        Assertions.assertEquals(new java.math.BigDecimal("1.5"),selections.getFirst().overtimeHours());
+        Assertions.assertEquals("AUTO",selections.getFirst().regular().getMode());
+    }
+    @Test void absentCoworkersKeepTheReporterOnlyDecision() throws Exception {
+        String body="{\"expectedRevision\":4,\"outcome\":\"WORKED\",\"masterWorksiteIds\":[11],\"includedEntryIds\":[11],\"removeExistingConfirmed\":false}";
+        mvc.perform(post(BASE+"/reviews/"+ID+"/approve").header(HEADER,KEY).contentType("application/json").content(body)).andExpect(status().isOk());
+        var captor=org.mockito.ArgumentCaptor.forClass(ReportReviewService.Decision.class);
+        verify(reviews).approve(org.mockito.ArgumentMatchers.eq(ID),captor.capture());
+        Assertions.assertTrue(captor.getValue().coworkers().isEmpty());
+    }
+    @Test void coworkerDayPreviewRequiresTheCredential() throws Exception {
+        String route=BASE+"/reviews/"+ID+"/coworkers/8/day";
+        mvc.perform(get(route)).andExpect(status().isForbidden());
+        mvc.perform(get(route).header(HEADER,"wrong")).andExpect(status().isForbidden());
+        verifyNoInteractions(reviews);
+        mvc.perform(get(route).header(HEADER,KEY)).andExpect(status().isOk());
+        verify(reviews).coworkerDay(ID,8L);
+    }
     @Test void exactDecimalTextAndTypedScopeReachService() throws Exception {
         String body="{\"expectedRevision\":4,\"outcome\":\"WORKED\",\"masterWorksiteIds\":[11],\"includedEntryIds\":[11],\"overtimeHours\":\"1.5\",\"regular\":{\"mode\":\"CUSTOM\",\"hours\":[{\"masterWorksiteId\":11,\"hours\":\"8\"}]},\"removeExistingConfirmed\":false}";
         mvc.perform(post(BASE+"/reviews/"+ID+"/approve").header(HEADER,KEY).contentType("application/json").content(body)).andExpect(status().isOk()).andExpect(header().string("Cache-Control","no-store"));

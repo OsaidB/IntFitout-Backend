@@ -148,7 +148,7 @@ class ReportingMySqlIntegrationTest {
             ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/001-whatsapp-reporting.sql"));
             ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/002-whatsapp-reporting-other-and-nicknames.sql"));
             ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/003-whatsapp-daily-runs.sql"));
-            ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/004-whatsapp-report-review.sql"));
+            ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/004-whatsapp-report-review.sql"));ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/005-report-review-coworkers.sql"));
         }
     }
     private void configured() throws Exception {
@@ -447,7 +447,7 @@ class ReportingMySqlIntegrationTest {
         jdbc.update("INSERT INTO whatsapp_report_requests(id,worker_id,recipient,phone_id,work_date,step,revision,outcome,created_at,submitted_at) VALUES(?,8,'972599000008','123400007',?,'SUBMITTED',5,'WORKED',?,?)",submitted,DAY,java.sql.Timestamp.from(clock.instant()),java.sql.Timestamp.from(clock.instant()));
         jdbc.update("INSERT INTO whatsapp_report_sites VALUES(?,12,'Submitted snapshot')",submitted);jdbc.update("INSERT INTO whatsapp_report_coworkers VALUES(?,12,7,'Submitted mention')",submitted);
         try(Connection c=dataSource.getConnection()){ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/002-whatsapp-reporting-other-and-nicknames.sql"));ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/003-whatsapp-daily-runs.sql"));
-            ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/004-whatsapp-report-review.sql"));}
+            ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/004-whatsapp-report-review.sql"));ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/005-report-review-coworkers.sql"));}
         assertEquals("AWAITING_REVIEW",reviewService().detail(submitted).report().reviewStatus());
         assertEquals("DRAFT",reviewService().detail(id).report().reviewStatus());
         service.configureWorker(7,true,"970599000007");service.configureWorker(8,true,"972599000008");
@@ -552,7 +552,7 @@ class ReportingMySqlIntegrationTest {
         jdbc.update("INSERT INTO whatsapp_report_requests(id,worker_id,recipient,phone_id,work_date,step,created_at) VALUES(?,7,'970599000007','123400007',?,'START',?)",id,DAY,java.sql.Timestamp.from(clock.instant()));
         jdbc.update("INSERT INTO whatsapp_report_outbound(id,request_id,revision,kind,payload,state,meta_id,created_at) VALUES(?,?,0,'TEMPLATE',?,'ACCEPTED','wamid.preserveThird',?)",out,id,payload,java.sql.Timestamp.from(clock.instant()));
         try(Connection c=dataSource.getConnection()) {ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/003-whatsapp-daily-runs.sql"));
-            ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/004-whatsapp-report-review.sql"));}
+            ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/004-whatsapp-report-review.sql"));ScriptUtils.executeSqlScript(c,new FileSystemResource("docs/sql/005-report-review-coworkers.sql"));}
         Outbound migrated=store.peekOutbound(out);assertEquals(payload,migrated.payload());assertEquals("970599000007",migrated.recipient());assertEquals("123400007",migrated.phoneId());assertEquals("WORKER",migrated.recipientType());assertEquals("wamid.preserveThird",migrated.metaId());assertNull(migrated.runId());
         assertEquals(0,count("whatsapp_daily_runs"));assertEquals(0,count("whatsapp_daily_members"));assertFalse(store.transaction(() -> store.lockWorker(7)).eligible());
     }
@@ -606,6 +606,300 @@ class ReportingMySqlIntegrationTest {
         transport=p -> new ReportingSender.Result("REJECTED",null);service.drainOne();transport=p -> new ReportingSender.Result("ACCEPTED","wamid.independentManagement");service.drainOne();assertEquals(Set.of("ACCEPTED","REJECTED"),new HashSet<>(store.managementOutbound(dailyRun().id()).stream().map(Outbound::state).toList()));
     }
 
+    // ---------------------------------------------------------------- coworker assignment
+    private static final java.math.BigDecimal EIGHT=new java.math.BigDecimal("8");
+    private ReportReviewService.CoworkerDecision pick(long worker,List<Long> entries,String ot) {
+        return new ReportReviewService.CoworkerDecision(worker,entries,ot==null?null:new java.math.BigDecimal(ot),null,null);
+    }
+    private ReportReviewService.Decision withCoworkers(long revision,List<Long> sites,List<ReportReviewService.CoworkerDecision> picks) {
+        return new ReportReviewService.Decision(revision,"WORKED",sites,List.of(11L,12L),null,null,null,false,picks);
+    }
+    private List<Map<String,Object>> dayOf(long worker) {
+        return jdbc.queryForList("SELECT master_worksite_id,regular_hours_override,overtime_hours_override FROM work_assignments WHERE team_member_id=? AND date=? ORDER BY master_worksite_id",worker,REVIEW_DAY);
+    }
+    private int assignmentsFor(long worker) {return jdbc.queryForObject("SELECT COUNT(*) FROM work_assignments WHERE team_member_id=? AND date=?",Integer.class,worker,REVIEW_DAY);}
+    private List<Long> sitesOf(long worker) {return dayOf(worker).stream().map(r->((Number)r.get("master_worksite_id")).longValue()).toList();}
+    private static life.work.IntFit.backend.dto.daily_assignments.CategoryAllocationDTO custom(long site,String hours) {
+        return new life.work.IntFit.backend.dto.daily_assignments.CategoryAllocationDTO("CUSTOM",
+                List.of(new life.work.IntFit.backend.dto.daily_assignments.SiteHoursDTO(site,new java.math.BigDecimal(hours))));
+    }
+
+    @Test void customCoworkerAllocationIsValidatedAndStoredForThatPersonOnly() throws Exception {
+        String id=reviewFixture(false,"WORKED");
+        long revision=reviewService().detail(id).revision();
+        var picks=List.of(new ReportReviewService.CoworkerDecision(8L,List.of(11L),null,custom(11,"8"),null));
+        reviewService().approve(id,new ReportReviewService.Decision(revision,"WORKED",List.of(11L,12L),List.of(11L,12L),null,null,null,false,picks));
+
+        assertEquals(0,new java.math.BigDecimal(String.valueOf(dayOf(8).getFirst().get("regular_hours_override"))).compareTo(EIGHT));
+        // The reporter keeps an automatic split; the coworker's explicit hours stay their own.
+        for(var row:dayOf(7))assertNull(row.get("regular_hours_override"));
+    }
+
+    @Test void aCoworkerCustomSplitThatNoLongerFitsIsRejectedForEveryone() throws Exception {
+        String id=reviewFixture(false,"WORKED");
+        long revision=reviewService().detail(id).revision();
+        // Seven hours cannot be the whole regular day for a single worksite.
+        var picks=List.of(new ReportReviewService.CoworkerDecision(8L,List.of(11L),null,custom(11,"7"),null));
+        assertThrows(RuntimeException.class,()->reviewService().approve(id,
+                new ReportReviewService.Decision(revision,"WORKED",List.of(11L,12L),List.of(11L,12L),null,null,null,false,picks)));
+        assertEquals(0,assignmentsFor(8));assertEquals(0,count("whatsapp_report_reviews"));
+    }
+
+    @Test void selectedCoworkerIsAssignedBesideTheReporterInOneTransaction() throws Exception {
+        String id=reviewFixture(false,"WORKED");
+        var detail=reviewService().detail(id);
+        // The stored mention now carries a stable worker id; names are never matched.
+        assertEquals(8L,detail.coworkers().getFirst().workerId());
+        reviewService().approve(id,withCoworkers(detail.revision(),List.of(11L,12L),List.of(pick(8,List.of(11L),null))));
+
+        assertEquals(2,assignmentsFor(7));
+        assertEquals(1,assignmentsFor(8));
+        // Each person keeps their own site set; an automatic split stores no override, so the
+        // existing eight-hour rule divides each person's own day at read time.
+        assertEquals(List.of(11L,12L),sitesOf(7));
+        assertEquals(List.of(11L),sitesOf(8));
+        for(var row:dayOf(7))assertNull(row.get("regular_hours_override"));
+        for(var row:dayOf(8))assertNull(row.get("regular_hours_override"));
+        // The reporter's own hours were never copied onto the coworker.
+        assertEquals(java.math.BigDecimal.ZERO.compareTo(overtimeOf(8)),0);
+        // The coworker report and its review status are untouched.
+        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM whatsapp_report_requests WHERE worker_id=8",Integer.class));
+    }
+
+    @Test void coworkerKeepsExistingWorksitesAndGainsNoDuplicate() throws Exception {
+        String id=reviewFixture(false,"WORKED");
+        jdbc.update("INSERT INTO work_assignments(team_member_id,master_worksite_id,date) VALUES(8,11,?)",REVIEW_DAY);
+        jdbc.update("INSERT INTO work_assignments(team_member_id,master_worksite_id,date) VALUES(8,12,?)",REVIEW_DAY);
+        long revision=reviewService().detail(id).revision();
+        reviewService().approve(id,withCoworkers(revision,List.of(11L,12L),List.of(pick(8,List.of(11L),null))));
+
+        // Already assigned at 11, and 12 was theirs already: both preserved, nothing duplicated.
+        assertEquals(2,assignmentsFor(8));
+        assertEquals(List.of(11L,12L),sitesOf(8));
+        for(var row:dayOf(8))assertNull(row.get("regular_hours_override"));
+    }
+
+    @Test void coworkerOvertimeIsIndependentOfTheReporter() throws Exception {
+        String id=reviewFixture(false,"WORKED");
+        long revision=reviewService().detail(id).revision();
+        var decision=new ReportReviewService.Decision(revision,"WORKED",List.of(11L,12L),List.of(11L,12L),
+                new java.math.BigDecimal("3"),null,null,false,List.of(pick(8,List.of(11L),"1")));
+        reviewService().approve(id,decision);
+
+        assertEquals(0,new java.math.BigDecimal("3").compareTo(overtimeOf(7)));
+        assertEquals(0,new java.math.BigDecimal("1").compareTo(overtimeOf(8)));
+    }
+
+    @Test void unselectedCoworkerOvertimeAndDayStayUntouched() throws Exception {
+        String id=reviewFixture(false,"WORKED");
+        jdbc.update("INSERT INTO work_assignment_overtime(team_member_id,date,overtime_hours) VALUES(8,?,2)",REVIEW_DAY);
+        long revision=reviewService().detail(id).revision();
+        reviewService().approve(id,worked(revision,List.of(11L,12L),false));
+
+        assertEquals(0,assignmentsFor(8));
+        assertEquals(0,new java.math.BigDecimal("2").compareTo(overtimeOf(8)));
+        assertNull(reviewService().detail(id).approval().get("coworkers").get(0));
+    }
+
+    private java.math.BigDecimal overtimeOf(long worker) {
+        var rows=jdbc.queryForList("SELECT overtime_hours FROM work_assignment_overtime WHERE team_member_id=? AND date=?",java.math.BigDecimal.class,worker,REVIEW_DAY);
+        return rows.isEmpty()?java.math.BigDecimal.ZERO:rows.getFirst();
+    }
+
+    @Test void arbitraryUnmentionedOrSelfSelectionsAreRejected() throws Exception {
+        String id=reviewFixture(false,"WORKED");
+        long revision=reviewService().detail(id).revision();
+        // Worker 8 is mentioned at entry 11 only, never at entry 12.
+        assertEquals(409,assertThrows(ReportingProblem.class,()->reviewService().approve(id,withCoworkers(revision,List.of(11L,12L),List.of(pick(8,List.of(12L),null))))).status);
+        // Worker 9 is mentioned nowhere in this report.
+        assertEquals(409,assertThrows(ReportingProblem.class,()->reviewService().approve(id,withCoworkers(revision,List.of(11L,12L),List.of(pick(9,List.of(11L),null))))).status);
+        // The reporter cannot be their own coworker.
+        assertEquals(400,assertThrows(ReportingProblem.class,()->reviewService().approve(id,withCoworkers(revision,List.of(11L,12L),List.of(pick(7,List.of(11L),null))))).status);
+        // The same coworker must be listed once, with all their entries.
+        assertEquals(400,assertThrows(ReportingProblem.class,()->reviewService().approve(id,withCoworkers(revision,List.of(11L,12L),List.of(pick(8,List.of(11L),null),pick(8,List.of(11L),null))))).status);
+        assertEquals(0,count("whatsapp_report_reviews"));assertEquals(0,assignmentsFor(8));
+    }
+
+    @Test void coworkerEntryMustStayIncludedAndRetainedInTheProposal() throws Exception {
+        String id=reviewFixture(false,"WORKED");
+        long revision=reviewService().detail(id).revision();
+        // Entry 11 excluded from the approved entries.
+        var excluded=new ReportReviewService.Decision(revision,"WORKED",List.of(11L,12L),List.of(12L),null,null,null,false,List.of(pick(8,List.of(11L),null)));
+        assertEquals(400,assertThrows(ReportingProblem.class,()->reviewService().approve(id,excluded)).status);
+        // Entry 11 included, but its worksite dropped from the reporter final site set.
+        var dropped=new ReportReviewService.Decision(revision,"WORKED",List.of(12L),List.of(11L,12L),null,null,null,false,List.of(pick(8,List.of(11L),null)));
+        assertEquals(409,assertThrows(ReportingProblem.class,()->reviewService().approve(id,dropped)).status);
+        assertEquals(0,count("whatsapp_report_reviews"));assertEquals(0,assignmentsFor(8));
+    }
+
+    @Test void identicalRetryIsIdempotentAndADifferentCoworkerSetConflicts() throws Exception {
+        String id=reviewFixture(false,"WORKED");
+        long revision=reviewService().detail(id).revision();
+        var decision=withCoworkers(revision,List.of(11L,12L),List.of(pick(8,List.of(11L),null)));
+        reviewService().approve(id,decision);
+        int rows=count("work_assignments");
+
+        reviewService().approve(id,decision);                       // identical retry
+        assertEquals(1,count("whatsapp_report_reviews"));
+        assertEquals(rows,count("work_assignments"));
+        assertEquals(1,assignmentsFor(8));
+
+        var different=withCoworkers(revision,List.of(11L,12L),List.of());
+        assertEquals(409,assertThrows(ReportingProblem.class,()->reviewService().approve(id,different)).status);
+        assertEquals(1,count("whatsapp_report_reviews"));
+    }
+
+    @Test void everyAffectedPersonAppearsInApprovalEvidence() throws Exception {
+        String id=reviewFixture(false,"WORKED");
+        jdbc.update("INSERT INTO work_assignments(team_member_id,master_worksite_id,date) VALUES(8,12,?)",REVIEW_DAY);
+        long revision=reviewService().detail(id).revision();
+        reviewService().approve(id,withCoworkers(revision,List.of(11L,12L),List.of(pick(8,List.of(11L),null))));
+
+        var evidence=reviewService().detail(id).approval().get("coworkers");
+        assertEquals(1,evidence.size());
+        assertEquals(8,evidence.get(0).get("workerId").asInt());
+        assertEquals(11,evidence.get(0).get("entryIds").get(0).asInt());
+        assertEquals(11,evidence.get(0).get("addedMasterWorksiteIds").get(0).asInt());
+        assertEquals(1,evidence.get(0).get("before").get("assignments").size());
+        assertEquals(2,evidence.get(0).get("after").get("assignments").size());
+    }
+
+    @Test void aFailureAfterTheWritesRollsBackEveryAffectedPerson() throws Exception {
+        String id=reviewFixture(false,"WORKED");
+        long revision=reviewService().detail(id).revision();
+        int before=count("work_assignments");
+        store.failAt.set("REVIEW_AFTER_WRITES");
+        assertThrows(DataAccessException.class,()->reviewService().approve(id,withCoworkers(revision,List.of(11L,12L),List.of(pick(8,List.of(11L),null)))));
+
+        assertEquals(before,count("work_assignments"));
+        assertEquals(0,assignmentsFor(8));
+        assertEquals(0,count("whatsapp_report_reviews"));
+        assertEquals(revision,reviewService().detail(id).revision());
+    }
+
+    @Test void staleRevisionAndFrozenPayrollProtectEveryone() throws Exception {
+        String id=reviewFixture(false,"WORKED");
+        long revision=reviewService().detail(id).revision();
+        var picks=List.of(pick(8,List.of(11L),null));
+        assertEquals(409,assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                ()->reviewService().approve(id,withCoworkers(revision+5,List.of(11L,12L),picks))).getStatusCode().value());
+        assertEquals(0,assignmentsFor(8));
+
+        jdbc.update("INSERT INTO payroll_week(week_start,week_end,status,created_at,updated_at) VALUES(?,?,'FINALIZED',?,?)",
+                life.work.IntFit.backend.service.PayrollService.satThu(REVIEW_DAY)[0],life.work.IntFit.backend.service.PayrollService.satThu(REVIEW_DAY)[1],
+                java.time.OffsetDateTime.now(clock),java.time.OffsetDateTime.now(clock));
+        assertEquals(409,assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                ()->reviewService().approve(id,withCoworkers(revision,List.of(11L,12L),picks))).getStatusCode().value());
+        assertEquals(0,assignmentsFor(8));assertEquals(0,count("whatsapp_report_reviews"));
+    }
+
+    @Test void coworkerDayPreviewReadsWithoutCreatingAnything() throws Exception {
+        String id=reviewFixture(false,"WORKED");
+        int before=count("work_assignments");
+        var preview=reviewService().coworkerDay(id,8);
+        assertEquals(8,preview.workerId());
+        assertEquals(0,preview.existing().assignments().size());
+        assertEquals(before,count("work_assignments"));
+        assertEquals(0,count("whatsapp_report_reviews"));
+        // Only workers this report mentions can be previewed.
+        assertEquals(404,assertThrows(ReportingProblem.class,()->reviewService().coworkerDay(id,9)).status);
+    }
+
+    // ------------------------------------------- coworker approval under contention
+    /** A planner day that also writes the coworker's row, so both writers touch worker 8. */
+    private life.work.IntFit.backend.dto.daily_assignments.DailyWorkAssignmentDTO dayWithCoworker(Long revision) {
+        var d=new life.work.IntFit.backend.dto.daily_assignments.DailyWorkAssignmentDTO();
+        d.setDate(REVIEW_DAY);d.setExpectedRevision(revision);
+        d.setAssignments(List.of(reviewPair(7,11),reviewPair(8,11)));d.setOvertime(List.of());return d;
+    }
+
+    /** A second submitted report, by another worker, naming the same coworker at the same site.
+     *  Worker 9 is deliberately never reporting-configured: assigning an existing coworker must
+     *  not depend on their messaging eligibility. */
+    private String secondReportNamingWorkerEight() {
+        String id=UUID.randomUUID().toString();
+        jdbc.update("INSERT INTO whatsapp_report_requests(id,worker_id,recipient,phone_id,work_date,step,revision,created_at,submitted_at,outcome) VALUES(?,9,'970599000009','123400009',?,'SUBMITTED',9,?,?,'WORKED')",
+                id,REVIEW_DAY,java.sql.Timestamp.from(clock.instant()),java.sql.Timestamp.from(clock.instant()));
+        store.addSite(new Site(id,11,"ninth nickname"));
+        store.addMention(new Coworker(id,11,8,"same coworker"));
+        return id;
+    }
+
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void coworkerApprovalAndAPlannerSaveOfThatCoworkerSerialiseAndTheLoserFails(boolean plannerFirst) throws Exception {
+        String id=reviewFixture(false,"WORKED");
+        var picks=List.of(pick(8,List.of(11L),null));
+        var gate=new CountDownLatch(1);var release=new CountDownLatch(1);var pool=Executors.newFixedThreadPool(2);
+        try {
+            var first=pool.submit(()->reviewTx(()->{
+                new life.work.IntFit.backend.service.AssignmentConcurrency(jdbc).lockDay(REVIEW_DAY);
+                gate.countDown();
+                try{assertTrue(release.await(10,TimeUnit.SECONDS));}catch(Exception e){throw new RuntimeException(e);}
+                if(plannerFirst)planner().saveAssignmentsForDate(dayWithCoworker(0L));
+                else reviewService().approve(id,withCoworkers(0,List.of(11L,12L),picks));
+                return null;}));
+            assertTrue(gate.await(10,TimeUnit.SECONDS));
+            var second=pool.submit(()->{
+                if(plannerFirst)return reviewService().approve(id,withCoworkers(0,List.of(11L,12L),picks));
+                return reviewTx(()->{planner().saveAssignmentsForDate(dayWithCoworker(0L));return null;});});
+            // The second writer cannot proceed while the first holds the day guard.
+            Thread.sleep(150);assertFalse(second.isDone());
+            release.countDown();first.get(20,TimeUnit.SECONDS);
+            // Whoever committed bumped the revision, so the other's expected revision is stale.
+            assertThrows(ExecutionException.class,()->second.get(20,TimeUnit.SECONDS));
+            assertEquals(plannerFirst?0:1,count("whatsapp_report_reviews"));
+            // Either way worker 8 ends the day with exactly one row at that worksite.
+            assertEquals(1,assignmentsFor(8));assertEquals(List.of(11L),sitesOf(8));
+        } finally { release.countDown();pool.shutdownNow(); }
+    }
+
+    @Test void twoReportsAssigningTheSameCoworkerCannotBothCommitOrDuplicateTheRow() throws Exception {
+        String first=reviewFixture(false,"WORKED");
+        String second=secondReportNamingWorkerEight();
+        var picks=List.of(pick(8,List.of(11L),null));
+        var outcomes=new java.util.concurrent.CopyOnWriteArrayList<Throwable>();
+        List<Runnable> jobs=List.of(
+            ()->{try{reviewService().approve(first,withCoworkers(0,List.of(11L,12L),picks));}catch(RuntimeException e){outcomes.add(e);}},
+            ()->{try{reviewService().approve(second,new ReportReviewService.Decision(0L,"WORKED",List.of(11L),List.of(11L),null,null,null,false,picks));}catch(RuntimeException e){outcomes.add(e);}});
+        race(new ArrayList<>(jobs));
+
+        // Exactly one approval commits; the other sees a stale day revision and fails whole.
+        assertEquals(1,outcomes.size());
+        assertEquals(1,count("whatsapp_report_reviews"));
+        // The shared coworker is assigned once, never twice, at the shared worksite.
+        assertEquals(1,assignmentsFor(8));assertEquals(List.of(11L),sitesOf(8));
+
+        // Retrying the loser against the current revision now succeeds and still adds no duplicate.
+        String loser=jdbc.queryForObject("SELECT id FROM whatsapp_report_requests WHERE id IN (?,?) AND id NOT IN (SELECT request_id FROM whatsapp_report_reviews)",String.class,first,second);
+        long current=reviewService().detail(loser).revision();
+        reviewService().approve(loser,loser.equals(first)
+                ? withCoworkers(current,List.of(11L,12L),picks)
+                : new ReportReviewService.Decision(current,"WORKED",List.of(11L),List.of(11L),null,null,null,false,picks));
+        assertEquals(2,count("whatsapp_report_reviews"));
+        assertEquals(1,assignmentsFor(8));assertEquals(List.of(11L),sitesOf(8));
+    }
+
+    @Test void aFailedSecondApprovalOfTheSameCoworkerLeavesTheFirstResultIntact() throws Exception {
+        String first=reviewFixture(false,"WORKED");
+        String second=secondReportNamingWorkerEight();
+        var picks=List.of(pick(8,List.of(11L),null));
+        reviewService().approve(first,withCoworkers(0,List.of(11L,12L),picks));
+        var saved=jdbc.queryForList("SELECT team_member_id,master_worksite_id FROM work_assignments WHERE date=? ORDER BY team_member_id,master_worksite_id",REVIEW_DAY);
+        long revision=reviewService().detail(second).revision();
+
+        // The second approval fails after its writes; nothing of it survives, and the first
+        // approval's assignments and evidence are untouched.
+        store.failAt.set("REVIEW_AFTER_WRITES");
+        assertThrows(DataAccessException.class,()->reviewService().approve(second,
+                new ReportReviewService.Decision(revision,"WORKED",List.of(11L),List.of(11L),null,null,null,false,picks)));
+
+        assertEquals(saved,jdbc.queryForList("SELECT team_member_id,master_worksite_id FROM work_assignments WHERE date=? ORDER BY team_member_id,master_worksite_id",REVIEW_DAY));
+        assertEquals(1,count("whatsapp_report_reviews"));
+        assertEquals(1,assignmentsFor(8));
+        assertNotNull(reviewService().detail(first).approval());
+        assertNull(reviewService().detail(second).approval());
+    }
+
     private class FaultStore extends JdbcReportingStore {
         final AtomicReference<String> failAt=new AtomicReference<>();final AtomicBoolean abortAccepted=new AtomicBoolean();
         final AtomicInteger transactions=new AtomicInteger(),pendingQueries=new AtomicInteger();
@@ -616,6 +910,14 @@ class ReportingMySqlIntegrationTest {
         @Override public void addRunMember(DailyMember m){super.addRunMember(m);fail("RUN_MEMBER");}
         @Override public void insertOutbound(Outbound o){super.insertOutbound(o);if(o.recipientType().equals("MANAGEMENT"))fail("MANAGEMENT_INTENT");}
         @Override public void resolveSite(String request,long entry,long master,String key,Instant at){super.resolveSite(request,entry,master,key,at);fail("RESOLUTION");}
+        final AtomicInteger mentionReads=new AtomicInteger();
+        /** approve() reads mentions to validate, then again in its closing detail read. Failing the
+         *  second read puts the fault after every assignment, overtime and evidence write. */
+        @Override public List<Coworker> mentions(String request){
+            List<Coworker> rows=super.mentions(request);
+            if(mentionReads.incrementAndGet()>=2)fail("REVIEW_AFTER_WRITES");
+            return rows;
+        }
         @Override public void saveOutbound(Outbound o){
             super.saveOutbound(o);fail(o.state());
             if(o.state().equals("ACCEPTED") && abortAccepted.compareAndSet(true,false)) {
