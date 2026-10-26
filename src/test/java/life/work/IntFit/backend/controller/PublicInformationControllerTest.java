@@ -54,7 +54,7 @@ class PublicInformationControllerTest {
                 .andExpect(content().string(containsString("خدمات التشطيبات الداخلية، بما في ذلك أعمال الجبس والدهان.")))
                 .andExpect(content().string(containsString("بيتونيا، رام الله، الضفة الغربية، فلسطين.")))
                 .andExpect(content().string(containsString("Osaid Jamal Baba")))
-                .andExpect(content().string(containsString("href=\"tel:+970598786818\"")))
+                .andExpect(content().string(containsString("href=\"tel:+970599783048\"")))
                 .andExpect(content().string(containsString("href=\"mailto:office.albaba@gmail.com\"")))
                 .andExpect(content().string(containsString("href=\"/privacy\"")))
                 .andExpect(content().string(containsString("href=\"/data-deletion\"")));
