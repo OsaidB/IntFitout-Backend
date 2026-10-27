@@ -95,8 +95,10 @@ try {
     $env:INTFITOUT_MYSQL_TEST_PASSWORD = $env:MYSQL_PASSWORD
     $env:INTFITOUT_MYSQL_TEST_RUN_ID = $runId
     $env:MAVEN_SKIP_RC = '1'
+    # Both guarded MySQL suites run against the same disposable container.
     $suites = 'ReportingMySqlIntegrationTest'
     if ($IntegrationMethods) { $suites += '#' + $IntegrationMethods }
+    if (-not $IntegrationMethods) { $suites += ',SupplierPaymentMySqlIntegrationTest' }
     Push-Location -LiteralPath $projectRoot
     try {
         $logPath = Join-Path $projectRoot 'target/reporting-mysql-validation.log'
