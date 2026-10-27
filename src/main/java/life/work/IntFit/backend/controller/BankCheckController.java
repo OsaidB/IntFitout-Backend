@@ -31,6 +31,8 @@ public class BankCheckController {
 
     private final BankCheckService service;
     private final FileStorageService storage;
+    /** Stops edits here from invalidating a recorded supplier payment. */
+    private final life.work.IntFit.backend.supplier.ChequeWriteGuard guard;
 
     /**
      * GET /api/bank-checks
@@ -91,6 +93,7 @@ public class BankCheckController {
     @PatchMapping("/{id}")
     public BankCheckDTO patch(@PathVariable Long id, @RequestBody BankCheckDTO patch) {
         // amount/dueDate/recipientName can be omitted in patch (mapper ignores nulls)
+        guard.assertPatchAllowed(id, patch);
         return service.update(id, patch);
     }
 
@@ -100,8 +103,16 @@ public class BankCheckController {
      */
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
+        guard.assertDeleteAllowed(id);
         service.delete(id);
         return ResponseEntity.noContent().build();
+    }
+
+    /** A guarded write is refused rather than silently breaking a recorded supplier payment. */
+    @ExceptionHandler(life.work.IntFit.backend.supplier.ChequeWriteGuard.Blocked.class)
+    public ResponseEntity<Map<String, Object>> onBlocked(
+            life.work.IntFit.backend.supplier.ChequeWriteGuard.Blocked e) {
+        return ResponseEntity.status(409).body(Map.of("error", e.getMessage(), "status", 409));
     }
 
     /**

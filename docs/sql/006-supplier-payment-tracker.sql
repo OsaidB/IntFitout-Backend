@@ -1,0 +1,60 @@
+-- MANUAL, ONCE ONLY, after 001-005 are already applied. Never edit or rerun 001-005.
+--
+-- Supplier-payment tracker for AL-Eatimad.
+--
+-- Scope of this script: VERIFICATION ONLY, plus a fallback statement.
+--
+-- The unique index below is declared on the SupplierPayment entity, so Hibernate creates it
+-- with the table on first start. Run the check at the end after deploying; apply the ALTER
+-- only if the index is missing.
+--
+-- The tracker's tables (supplier_payment, supplier_payment_allocation, cheque_movement,
+-- supplier_allocation_change, supplier_payment_idempotency) and the new nullable columns on
+-- bank_check are ordinary JPA mappings, so the application's existing
+-- spring.jpa.hibernate.ddl-auto=update creates them on first start. ddl-auto only adds; it
+-- never drops a column or rewrites a row.
+--
+-- MODEL SCOPE
+--   Every cheque handed to AL-Eatimad is treated as guaranteed, so it counts as a payment
+--   the moment it is handed over, exactly like cash. The tracker does NOT model bank
+--   clearance, bounced cheques or future funding status; those rare cases are handled
+--   outside the app. There is deliberately no settlement column.
+--
+-- LEGACY DATA BEHAVIOUR
+--   Four nullable columns are added to bank_check, all NULL on pre-existing rows:
+--     issuer_type              NULL - who wrote it is unknown. fromWhom text is not evidence.
+--     current_holder           NULL - where it is now is unknown, which is not "we hold it".
+--     availability_verified_at NULL - nobody has confirmed it yet.
+--     availability_verified_by NULL - and nobody is recorded as having done so.
+--   NULL means "not known", never a value. Nothing is backfilled, classified or inferred.
+--   A legacy cheque stays unusable for a new supplier payment until an administrator
+--   confirms its issuer and current holder. That is an availability check, not a bank step.
+--
+--   The existing `cleared` column is NOT touched by this feature. The tracker never reads
+--   or writes it, and no payment balance depends on it, so its current meaning and the
+--   screens that use it keep working unchanged.
+--
+-- STARTING POSITION
+--   The payment ledger starts empty on purpose. No historical payment is imported, no
+--   opening balance is created, and nothing is reconciled against the supplier's SMS
+--   balance. Existing invoices, receipts, cheques and payroll rows are untouched.
+--
+-- ROLLBACK
+--   Dropping this index is safe. Dropping the tracker tables is NOT a safe rollback once
+--   anyone has recorded a payment: those rows are the only record of money handed over and
+--   of cheque custody. To retire the feature, stop writing to it and keep the data.
+
+-- At most one ACTIVE supplier payment may use a given cheque, while every historical link
+-- is preserved.
+--
+-- supplier_payment.bank_check_id is permanent evidence and is never cleared, not even on
+-- reversal. active_bank_check_id mirrors it only while the payment stands and is set to
+-- NULL when the payment is reversed. MySQL allows repeated NULLs in a unique index, so
+-- reversed rows keep their history while this index still admits exactly one live use,
+-- including under concurrent requests.
+-- 1) CHECK first - expect one row named uk_supplier_payment_active_check:
+--    SHOW INDEX FROM supplier_payment WHERE Key_name = 'uk_supplier_payment_active_check';
+--
+-- 2) ONLY if that returns nothing, apply:
+-- ALTER TABLE supplier_payment
+--     ADD CONSTRAINT uk_supplier_payment_active_check UNIQUE (active_bank_check_id);

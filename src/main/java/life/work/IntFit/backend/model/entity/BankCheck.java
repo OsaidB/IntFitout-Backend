@@ -51,4 +51,33 @@ public class BankCheck {
     /** NEW — denormalized snapshot (fast list/search without joins). */
     @Column(name = "source_master_worksite_name")
     private String sourceMasterWorksiteName;
+
+    // ------------------------------------------------------------------
+    // Supplier-payment tracker fields.
+    //
+    // Every column below is nullable and is NULL on all pre-existing rows. NULL means
+    // "not known", never a value, and `fromWhom` text is not evidence of who issued it.
+    // Nothing is backfilled or inferred. An administrator confirms issuer and custody
+    // before a legacy cheque may back a new payment.
+    //
+    // The legacy `cleared` flag above is untouched by this feature and keeps its existing
+    // meaning and behaviour; the tracker neither reads it nor writes it.
+    // ------------------------------------------------------------------
+
+    /** Who wrote it. NULL = unknown (legacy). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "issuer_type", length = 20)
+    private life.work.IntFit.backend.supplier.SupplierEnums.IssuerType issuerType;
+
+    /** Who holds it now. NULL = unknown (legacy), which is not "we hold it". */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "current_holder", length = 20)
+    private life.work.IntFit.backend.supplier.SupplierEnums.Holder currentHolder;
+
+    /** When an administrator confirmed issuer + availability. Verification alone creates no coverage. */
+    @Column(name = "availability_verified_at")
+    private java.time.Instant availabilityVerifiedAt;
+
+    @Column(name = "availability_verified_by", length = 120)
+    private String availabilityVerifiedBy;
 }
