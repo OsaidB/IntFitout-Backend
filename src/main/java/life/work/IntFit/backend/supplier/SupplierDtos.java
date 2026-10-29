@@ -26,7 +26,12 @@ public final class SupplierDtos {
             BigDecimal receipts,
             BigDecimal paid,
             BigDecimal remainingToCover,
-            BigDecimal credit
+            BigDecimal credit,
+            /** Supplies dated inside the selected period. Null when no period is selected.
+             *  May be negative where applied returns exceed supply in that period. */
+            BigDecimal periodSupplies,
+            /** This project's SHARE of payments made in the period, never a payment total. */
+            BigDecimal periodAllocated
     ) { }
 
     public record WorksitePage(
@@ -35,7 +40,42 @@ public final class SupplierDtos {
             Integer nextOffset,
             boolean hasMore,
             int total,
-            BigDecimal unassignedSupplies
+            /** All-time supplies reaching no master worksite. */
+            BigDecimal unassignedSupplies,
+            /** Whether the list is in date order, so the client knows if headers apply. */
+            boolean grouped,
+            Summary summary
+    ) { }
+
+    /**
+     * Period figures for exactly the set the list is showing, plus the supplier-wide totals
+     * they sit inside.
+     *
+     * These scopes are deliberately NOT reconciled with each other: actualPaidAllProjects
+     * counts every payment once including money assigned to nobody, while
+     * matchingAllocated sums only the shares of the projects listed. Forcing them to agree
+     * would mean double-counting a split payment or hiding unassigned money.
+     */
+    public record Summary(
+            int matchingProjects,
+            boolean periodSelected,
+            LocalDate from,
+            LocalDate to,
+            /** Supplies dated in the period for the matching projects. */
+            BigDecimal matchingPeriodSupplies,
+            /** Those projects' shares of payments made in the period. */
+            BigDecimal matchingPeriodAllocated,
+            /** Every payment in the period, counted once, across all projects. */
+            BigDecimal actualPaidAllProjects,
+            /** Of that, money not yet assigned to any project. */
+            BigDecimal unallocatedPaidInPeriod,
+            /** Supplies in the period reaching no master worksite. */
+            BigDecimal unassignedSuppliesInPeriod,
+            /** Cumulative, never period-scoped. */
+            BigDecimal stillToPayOverall,
+            BigDecimal creditOverall,
+            int projectsWithNoPayments,
+            int projectsInCredit
     ) { }
 
     public record AllocationInput(Long masterWorksiteId, BigDecimal amount) { }

@@ -35,7 +35,7 @@ public class WorksiteBrowseSnapshots {
 
     public record Entry(long masterId, LocalDate lastActivityOn, String group) { }
 
-    public record Snapshot(String id, List<Entry> entries, Instant createdAt) {
+    public record Snapshot(String id, String criteria, List<Entry> entries, Instant createdAt) {
         public int size() { return entries.size(); }
         public List<Entry> slice(int from, int limit) {
             if (from >= entries.size()) return List.of();
@@ -55,6 +55,14 @@ public class WorksiteBrowseSnapshots {
      * because only its latest activity is ranked.
      */
     public Snapshot create(Map<Long, LocalDate> lastActivity, LocalDate today) {
+        return create(lastActivity, today, "");
+    }
+
+    /**
+     * A snapshot remembers the criteria that produced it. Paging it under different criteria
+     * is refused rather than silently answered from the wrong ordering.
+     */
+    public Snapshot create(Map<Long, LocalDate> lastActivity, LocalDate today, String criteria) {
         LocalDate weekStart = startOfBusinessWeek(today);
 
         List<Entry> entries = lastActivity.entrySet().stream()
@@ -66,7 +74,16 @@ public class WorksiteBrowseSnapshots {
 
         evictIfNeeded();
         String id = UUID.randomUUID().toString();
-        Snapshot snap = new Snapshot(id, entries, Instant.now());
+        Snapshot snap = new Snapshot(id, criteria, entries, Instant.now());
+        store.put(id, snap);
+        return snap;
+    }
+
+    /** Freeze an order the caller has already decided, e.g. by amount rather than by date. */
+    public Snapshot createOrdered(List<Entry> ordered, String criteria) {
+        evictIfNeeded();
+        String id = UUID.randomUUID().toString();
+        Snapshot snap = new Snapshot(id, criteria, List.copyOf(ordered), Instant.now());
         store.put(id, snap);
         return snap;
     }

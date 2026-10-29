@@ -78,28 +78,213 @@ public class SupplierPaymentService {
      * snapshot id rebuilds it.
      */
     @Transactional(readOnly = true)
-    public WorksitePage browse(String snapshotId, int offset, int limit, LocalDate today) {
-        WorksiteBrowseSnapshots.Snapshot snap = (snapshotId == null || snapshotId.isBlank())
-                ? snapshots.create(agg.lastActivityByMaster(), today == null ? LocalDate.now(ZONE) : today)
-                : snapshots.get(snapshotId)
+    public WorksitePage browse(String snapshotId, int offset, int limit, LocalDate today,
+                               WorksiteQuery query) {
+        WorksiteQuery qy = query == null ? WorksiteQuery.defaults() : query;
+        LocalDate now = today == null ? LocalDate.now(ZONE) : today;
+        String criteria = qy.fingerprint();
+
+        WorksiteBrowseSnapshots.Snapshot snap;
+        if (snapshotId == null || snapshotId.isBlank()) {
+            snap = snapshots.createOrdered(rank(qy, now), criteria);
+        } else {
+            snap = snapshots.get(snapshotId)
                     .orElseThrow(() -> new Problem(410, "That browsing session expired. Refresh the list."));
+            // Paging a snapshot under different criteria would answer from the wrong ordering.
+            if (!criteria.equals(snap.criteria())) {
+                throw new Problem(409, "The filters changed. Refresh the list to continue.");
+            }
+        }
 
         int from = Math.max(0, offset);
         int size = Math.min(Math.max(1, limit), 100);
         List<WorksiteBrowseSnapshots.Entry> slice = snap.slice(from, size);
 
-        Map<Long, BigDecimal> supplies = agg.suppliesByMaster();
-        Map<Long, BigDecimal> receipts = agg.receiptsByMaster();
-        Map<Long, String> names = agg.masterNames();
-        Map<Long, BigDecimal> paid = paidByMaster();
-
+        Context ctx = context(qy);
         List<WorksiteRow> rows = slice.stream()
-                .map(e -> row(e.masterId(), e.lastActivityOn(), e.group(), supplies, receipts, paid, names))
+                .map(e -> row(e.masterId(), e.lastActivityOn(),
+                        qy.groupedByRecency() ? e.group() : null, ctx))
                 .toList();
 
         int next = from + slice.size();
+        List<Long> matchingIds = snap.entries().stream().map(WorksiteBrowseSnapshots.Entry::masterId).toList();
         return new WorksitePage(snap.id(), rows, next < snap.size() ? next : null,
-                next < snap.size(), snap.size(), agg.unassignedSuppliesTotal());
+                next < snap.size(), snap.size(), agg.unassignedSuppliesTotal(),
+                qy.groupedByRecency(), summaryFor(qy, matchingIds, ctx));
+    }
+
+    /** The same matching set the list uses, summarised. */
+    @Transactional(readOnly = true)
+    public Summary summary(WorksiteQuery query, LocalDate today) {
+        WorksiteQuery qy = query == null ? WorksiteQuery.defaults() : query;
+        LocalDate now = today == null ? LocalDate.now(ZONE) : today;
+        Context ctx = context(qy);
+        List<Long> ids = rank(qy, now).stream().map(WorksiteBrowseSnapshots.Entry::masterId).toList();
+        return summaryFor(qy, ids, ctx);
+    }
+
+    /** Everything the rows and summary need, loaded once per request. */
+    private record Context(
+            WorksiteQuery q,
+            Map<Long, BigDecimal> supplies, Map<Long, BigDecimal> receipts,
+            Map<Long, BigDecimal> paid, Map<Long, String> names,
+            Map<Long, BigDecimal> periodSupplies, Map<Long, BigDecimal> periodAllocated
+    ) { }
+
+    private Context context(WorksiteQuery qy) {
+        boolean period = qy.hasPeriod();
+        return new Context(qy,
+                agg.suppliesByMaster(), agg.receiptsByMaster(), paidByMaster(), agg.masterNames(),
+                period ? agg.suppliesByMasterBetween(qy.from(), qy.to()) : Map.of(),
+                period ? agg.allocatedByMasterBetween(qy.from(), qy.to()) : Map.of());
+    }
+
+    /**
+     * Filter, then sort, across the whole eligible dataset - never within a page.
+     *
+     * Period membership comes from the existence of dated records, not from a non-zero net:
+     * a delivery and an applied return can cancel out while the period genuinely had
+     * activity, and a fully paid project still belongs in that week's list.
+     */
+    private List<WorksiteBrowseSnapshots.Entry> rank(WorksiteQuery qy, LocalDate now) {
+        Map<Long, LocalDate> lastActivity = agg.lastActivityByMaster();
+        Context ctx = context(qy);
+
+        Set<Long> candidates = new TreeSet<>();
+        if (qy.hasPeriod()) {
+            candidates.addAll(agg.mastersWithSupplyRecordsBetween(qy.from(), qy.to()));
+            candidates.addAll(agg.mastersWithPaymentRecordsBetween(qy.from(), qy.to()));
+        } else {
+            candidates.addAll(lastActivity.keySet());
+            candidates.addAll(ctx.supplies().keySet());
+            candidates.addAll(ctx.paid().keySet());
+        }
+
+        Map<Long, String[]> text = (qy.q() == null) ? Map.of() : agg.searchableMasterText();
+        LocalDate weekStart = WorksiteQuery.startOfWeek(now);
+
+        List<WorksiteRow> matched = candidates.stream()
+                .filter(id -> matchesText(id, qy.q(), text, ctx.names()))
+                .filter(id -> matchesStatus(id, qy.status(), ctx))
+                .filter(id -> matchesLastActive(id, qy.lastActiveWithinDays(), lastActivity, now))
+                .map(id -> row(id, lastActivity.get(id),
+                        WorksiteBrowseSnapshots.groupFor(lastActivity.get(id), now, weekStart), ctx))
+                .toList();
+
+        Comparator<WorksiteRow> cmp = comparatorFor(qy);
+        return matched.stream().sorted(cmp)
+                .map(r -> new WorksiteBrowseSnapshots.Entry(
+                        r.masterWorksiteId(), r.lastActivityOn(), r.group()))
+                .toList();
+    }
+
+    /**
+     * REMAINING, CREDIT and NAME are all-time measures. The period sorts fall back to the
+     * all-time amounts when no period is chosen, so an amount sort never orders by a column
+     * that is null on every row.
+     */
+    private Comparator<WorksiteRow> comparatorFor(WorksiteQuery qy) {
+        boolean period = qy.hasPeriod();
+        Comparator<WorksiteRow> base = switch (qy.sort()) {
+            case REMAINING -> Comparator.comparing(WorksiteRow::remainingToCover);
+            case CREDIT -> Comparator.comparing(WorksiteRow::credit);
+            case PERIOD_SUPPLIES -> Comparator.comparing(
+                    r -> period ? nz(r.periodSupplies()) : nz(r.supplies()));
+            case PERIOD_PAID -> Comparator.comparing(
+                    r -> period ? nz(r.periodAllocated()) : nz(r.paid()));
+            case NAME -> Comparator.comparing(r -> r.name() == null ? "" : r.name(),
+                    java.text.Collator.getInstance(new java.util.Locale("ar")));
+            case RECENT_ACTIVITY -> Comparator.comparing(WorksiteRow::lastActivityOn,
+                    Comparator.nullsLast(Comparator.naturalOrder()));
+        };
+        // Newest first is the natural reading of "recent activity", so it inverts by default.
+        boolean ascending = qy.sort() == WorksiteQuery.Sort.RECENT_ACTIVITY
+                ? qy.ascending() : qy.ascending();
+        Comparator<WorksiteRow> ordered = ascending ? base : base.reversed();
+        if (qy.sort() == WorksiteQuery.Sort.RECENT_ACTIVITY && !qy.ascending()) {
+            ordered = base.reversed();
+        }
+        return ordered.thenComparing(WorksiteRow::masterWorksiteId);
+    }
+
+    private static BigDecimal nz(BigDecimal v) { return v == null ? BigDecimal.ZERO : v; }
+
+    private boolean matchesText(long id, String needle, Map<Long, String[]> text, Map<Long, String> names) {
+        if (needle == null) return true;
+        String n = normalize(needle);
+        String[] parts = text.get(id);
+        String hay = parts == null
+                ? normalize(names.getOrDefault(id, ""))
+                : normalize(parts[0] + " " + parts[1] + " " + parts[2]);
+        return hay.contains(n) || String.valueOf(id).contains(n);
+    }
+
+    /**
+     * Arabic is written with and without diacritics and with several forms of alef, so a
+     * search for a name typed one way must still find it stored another.
+     */
+    static String normalize(String raw) {
+        if (raw == null) return "";
+        String s = raw.toLowerCase(java.util.Locale.ROOT).trim();
+        s = s.replaceAll("[\\u064B-\\u0652\\u0640]", "");   // harakat and tatweel
+        s = s.replaceAll("[\\u0622\\u0623\\u0625\\u0671]", "\\u0627"); // alef forms
+        s = s.replace('\u0649', '\u064A').replace('\u0629', '\u0647');       // alef maqsura, ta marbuta
+        return s.replaceAll("\\s+", " ");
+    }
+
+    private boolean matchesStatus(long id, WorksiteQuery.Status st, Context ctx) {
+        if (st == null || st == WorksiteQuery.Status.ALL) return true;
+        BigDecimal sup = nz(ctx.supplies().get(id));
+        BigDecimal paid = nz(ctx.paid().get(id));
+        BigDecimal remaining = CoverageRules.remainingToCover(sup, paid);
+        BigDecimal credit = CoverageRules.credit(sup, paid);
+        return switch (st) {
+            case STILL_TO_PAY -> remaining.signum() > 0;
+            case NO_PAYMENTS -> paid.signum() == 0 && sup.signum() > 0;
+            case PARTLY_PAID -> paid.signum() > 0 && remaining.signum() > 0;
+            case PAID_IN_FULL -> sup.signum() > 0 && remaining.signum() == 0 && credit.signum() == 0;
+            case CREDIT -> credit.signum() > 0;
+            case ALL -> true;
+        };
+    }
+
+    private boolean matchesLastActive(long id, Integer withinDays,
+                                      Map<Long, LocalDate> lastActivity, LocalDate now) {
+        if (withinDays == null) return true;
+        LocalDate last = lastActivity.get(id);
+        if (last == null) return false;
+        return !last.isBefore(now.minusDays(withinDays));
+    }
+
+    private Summary summaryFor(WorksiteQuery qy, List<Long> matchingIds, Context ctx) {
+        BigDecimal matchSupplies = BigDecimal.ZERO, matchAllocated = BigDecimal.ZERO;
+        BigDecimal stillToPay = BigDecimal.ZERO, credit = BigDecimal.ZERO;
+        int noPayments = 0, inCredit = 0;
+
+        for (Long id : matchingIds) {
+            BigDecimal sup = nz(ctx.supplies().get(id));
+            BigDecimal paid = nz(ctx.paid().get(id));
+            stillToPay = stillToPay.add(CoverageRules.remainingToCover(sup, paid));
+            BigDecimal c = CoverageRules.credit(sup, paid);
+            credit = credit.add(c);
+            if (paid.signum() == 0 && sup.signum() > 0) noPayments++;
+            if (c.signum() > 0) inCredit++;
+            if (qy.hasPeriod()) {
+                matchSupplies = matchSupplies.add(nz(ctx.periodSupplies().get(id)));
+                matchAllocated = matchAllocated.add(nz(ctx.periodAllocated().get(id)));
+            }
+        }
+
+        boolean period = qy.hasPeriod();
+        return new Summary(
+                matchingIds.size(), period, qy.from(), qy.to(),
+                period ? CoverageRules.money(matchSupplies) : null,
+                period ? CoverageRules.money(matchAllocated) : null,
+                period ? agg.actualPaidBetween(qy.from(), qy.to()) : null,
+                period ? agg.unallocatedPaidBetween(qy.from(), qy.to()) : null,
+                period ? agg.unassignedSuppliesBetween(qy.from(), qy.to()) : null,
+                CoverageRules.money(stillToPay), CoverageRules.money(credit),
+                noPayments, inCredit);
     }
 
     /**
@@ -108,34 +293,34 @@ public class SupplierPaymentService {
      */
     @Transactional(readOnly = true)
     public List<WorksiteRow> outstanding() {
-        Map<Long, BigDecimal> supplies = agg.suppliesByMaster();
-        Map<Long, BigDecimal> receipts = agg.receiptsByMaster();
-        Map<Long, String> names = agg.masterNames();
-        Map<Long, BigDecimal> paid = paidByMaster();
+        Context ctx = context(WorksiteQuery.defaults());
         Map<Long, LocalDate> last = agg.lastActivityByMaster();
 
         Set<Long> ids = new TreeSet<>();
-        ids.addAll(supplies.keySet());
-        ids.addAll(paid.keySet());
+        ids.addAll(ctx.supplies().keySet());
+        ids.addAll(ctx.paid().keySet());
 
         return ids.stream()
-                .map(id -> row(id, last.get(id), null, supplies, receipts, paid, names))
+                .map(id -> row(id, last.get(id), null, ctx))
                 .filter(r -> r.remainingToCover().signum() > 0 || r.credit().signum() > 0)
                 .sorted(Comparator.comparing(WorksiteRow::remainingToCover).reversed()
                         .thenComparing(WorksiteRow::masterWorksiteId))
                 .toList();
     }
 
-    private WorksiteRow row(long id, LocalDate lastOn, String group,
-                            Map<Long, BigDecimal> supplies, Map<Long, BigDecimal> receipts,
-                            Map<Long, BigDecimal> paidByMaster, Map<Long, String> names) {
-        BigDecimal sup = CoverageRules.money(supplies.getOrDefault(id, BigDecimal.ZERO));
-        BigDecimal paid = CoverageRules.money(paidByMaster.getOrDefault(id, BigDecimal.ZERO));
-        return new WorksiteRow(id, names.getOrDefault(id, "#" + id), lastOn, group,
-                sup, CoverageRules.money(receipts.getOrDefault(id, BigDecimal.ZERO)),
+    private WorksiteRow row(long id, LocalDate lastOn, String group, Context ctx) {
+        BigDecimal sup = CoverageRules.money(ctx.supplies().getOrDefault(id, BigDecimal.ZERO));
+        BigDecimal paid = CoverageRules.money(ctx.paid().getOrDefault(id, BigDecimal.ZERO));
+        boolean period = ctx.q().hasPeriod();
+        return new WorksiteRow(id, ctx.names().getOrDefault(id, "#" + id), lastOn, group,
+                sup, CoverageRules.money(ctx.receipts().getOrDefault(id, BigDecimal.ZERO)),
                 paid,
                 CoverageRules.remainingToCover(sup, paid),
-                CoverageRules.credit(sup, paid));
+                CoverageRules.credit(sup, paid),
+                // A period total may legitimately be negative when applied returns exceed
+                // supply, so it is reported as it stands rather than floored at zero.
+                period ? CoverageRules.money(ctx.periodSupplies().getOrDefault(id, BigDecimal.ZERO)) : null,
+                period ? CoverageRules.money(ctx.periodAllocated().getOrDefault(id, BigDecimal.ZERO)) : null);
     }
 
     /**

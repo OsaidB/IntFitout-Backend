@@ -32,13 +32,48 @@ public class SupplierPaymentController {
     // ---------------- browsing ----------------
 
     /** Worksites ranked by latest activity, each once. Omit snapshotId to start/refresh. */
+    /**
+     * Worksites for the tracker list.
+     *
+     * Sending nothing keeps the original behaviour: the whole history, every project,
+     * newest activity first. `from`/`to` select a FINANCIAL period over dated supplies and
+     * payments; `lastActiveWithinDays` is a separate restriction on when a project was last
+     * worked, so the two date ideas never share a control.
+     */
     @GetMapping("/worksites")
     public WorksitePage worksites(@RequestParam(required = false) String snapshotId,
                                   @RequestParam(defaultValue = "0") int offset,
                                   @RequestParam(defaultValue = "25") int limit,
                                   @RequestParam(required = false)
-                                  @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate today) {
-        return service.browse(snapshotId, offset, limit, today);
+                                  @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate today,
+                                  @RequestParam(required = false)
+                                  @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+                                  @RequestParam(required = false)
+                                  @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+                                  @RequestParam(required = false) String q,
+                                  @RequestParam(required = false) String status,
+                                  @RequestParam(required = false) Integer lastActiveWithinDays,
+                                  @RequestParam(required = false) String sort,
+                                  @RequestParam(required = false) String dir) {
+        return service.browse(snapshotId, offset, limit, today,
+                WorksiteQuery.of(from, to, q, status, lastActiveWithinDays, sort, dir));
+    }
+
+    /** Totals for exactly the set the list is showing, under the same criteria. */
+    @GetMapping("/worksites/summary")
+    public Summary summary(@RequestParam(required = false)
+                           @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate today,
+                           @RequestParam(required = false)
+                           @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+                           @RequestParam(required = false)
+                           @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+                           @RequestParam(required = false) String q,
+                           @RequestParam(required = false) String status,
+                           @RequestParam(required = false) Integer lastActiveWithinDays,
+                           @RequestParam(required = false) String sort,
+                           @RequestParam(required = false) String dir) {
+        return service.summary(
+                WorksiteQuery.of(from, to, q, status, lastActiveWithinDays, sort, dir), today);
     }
 
     /** Everything still unresolved, including inactive worksites. Not paged. */

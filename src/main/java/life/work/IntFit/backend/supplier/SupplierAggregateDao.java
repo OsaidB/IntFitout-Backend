@@ -5,6 +5,7 @@ import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.Set;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -122,6 +123,169 @@ public class SupplierAggregateDao {
             if (id != null) out.put(id, toMoney(r.get("total")));
         }
         return out;
+    }
+
+    // ------------------------------------------------------------------
+    // Financial-period aggregates.
+    //
+    // Supplies are dated by invoice.date, the supplier's own transaction time, never by
+    // parsedAt: in live data an invoice is imported a median of 6 hours and sometimes 3 days
+    // after the supply, so parsedAt would file a Thursday delivery into the following week.
+    // A late import therefore changes a past period's figures after the fact, which is
+    // correct rather than a fault.
+    //
+    // Payments are dated by payment_date, the day money actually moved or a cheque changed
+    // hands, never by the row's creation time and never by a cheque's due date.
+    //
+    // Ranges are half-open [from 00:00, toExclusive 00:00) on business wall-clock dates, so
+    // a record at 23:59 on the last day is inside and midnight does not land in two periods.
+    // ------------------------------------------------------------------
+
+    /** Supplies per master in a period. May be negative where applied returns exceed supply. */
+    public Map<Long, BigDecimal> suppliesByMasterBetween(LocalDate from, LocalDate toInclusive) {
+        String sql = """
+            SELECT w.master_worksite_id AS master_id,
+                   COALESCE(SUM(COALESCE(i.total, i.net_total)), 0) AS total
+              FROM invoice i
+              JOIN worksites w ON w.id = i.worksite_id
+             WHERE w.master_worksite_id IS NOT NULL
+               AND i.date >= ? AND i.date < ?
+             GROUP BY w.master_worksite_id
+            """;
+        Map<Long, BigDecimal> out = new HashMap<>();
+        for (Map<String, Object> r : jdbc.queryForList(sql, startTs(from), endTsExclusive(toInclusive))) {
+            Long id = toLong(r.get("master_id"));
+            if (id != null) out.put(id, toMoney(r.get("total")));
+        }
+        return out;
+    }
+
+    /**
+     * Masters with at least one invoice row in the period.
+     *
+     * Deliberately counts ROWS, not a net total: a delivery and an applied return can cancel
+     * to zero while the week genuinely had activity, and such a project must still be listed.
+     */
+    public Set<Long> mastersWithSupplyRecordsBetween(LocalDate from, LocalDate toInclusive) {
+        String sql = """
+            SELECT DISTINCT w.master_worksite_id AS master_id
+              FROM invoice i
+              JOIN worksites w ON w.id = i.worksite_id
+             WHERE w.master_worksite_id IS NOT NULL
+               AND i.date >= ? AND i.date < ?
+            """;
+        return idSet(sql, startTs(from), endTsExclusive(toInclusive));
+    }
+
+    /**
+     * Allocated to each master in a period: the project's SHARE of payments made then, not
+     * the payments' full amounts. A 10,000 payment split 6,000 / 3,000 contributes exactly
+     * those shares, and its 1,000 remainder belongs to no project.
+     */
+    public Map<Long, BigDecimal> allocatedByMasterBetween(LocalDate from, LocalDate toInclusive) {
+        String sql = """
+            SELECT a.master_worksite_id AS master_id, COALESCE(SUM(a.amount), 0) AS total
+              FROM supplier_payment_allocation a
+              JOIN supplier_payment p ON p.id = a.payment_id
+             WHERE p.reversed_at IS NULL
+               AND p.payment_date >= ? AND p.payment_date <= ?
+             GROUP BY a.master_worksite_id
+            """;
+        Map<Long, BigDecimal> out = new HashMap<>();
+        for (Map<String, Object> r : jdbc.queryForList(sql, from, toInclusive)) {
+            Long id = toLong(r.get("master_id"));
+            if (id != null) out.put(id, toMoney(r.get("total")));
+        }
+        return out;
+    }
+
+    /** Masters with at least one allocation row from a payment made in the period. */
+    public Set<Long> mastersWithPaymentRecordsBetween(LocalDate from, LocalDate toInclusive) {
+        String sql = """
+            SELECT DISTINCT a.master_worksite_id AS master_id
+              FROM supplier_payment_allocation a
+              JOIN supplier_payment p ON p.id = a.payment_id
+             WHERE p.reversed_at IS NULL
+               AND p.payment_date >= ? AND p.payment_date <= ?
+            """;
+        return idSet(sql, from, toInclusive);
+    }
+
+    /**
+     * What was actually handed to the supplier in the period, counting each payment once.
+     *
+     * This is a supplier-wide figure and is NOT the sum of project shares: it includes money
+     * not yet assigned to any project, and it never double-counts a payment split across
+     * several projects.
+     */
+    public BigDecimal actualPaidBetween(LocalDate from, LocalDate toInclusive) {
+        String sql = """
+            SELECT COALESCE(SUM(p.amount), 0) AS total
+              FROM supplier_payment p
+             WHERE p.reversed_at IS NULL
+               AND p.payment_date >= ? AND p.payment_date <= ?
+            """;
+        return toMoney(jdbc.queryForList(sql, from, toInclusive).get(0).get("total"));
+    }
+
+    /** Of the money paid in the period, how much is still assigned to no project. */
+    public BigDecimal unallocatedPaidBetween(LocalDate from, LocalDate toInclusive) {
+        String sql = """
+            SELECT COALESCE(SUM(p.amount), 0) - COALESCE((
+                       SELECT SUM(a.amount) FROM supplier_payment_allocation a
+                        JOIN supplier_payment p2 ON p2.id = a.payment_id
+                       WHERE p2.reversed_at IS NULL
+                         AND p2.payment_date >= ? AND p2.payment_date <= ?), 0) AS total
+              FROM supplier_payment p
+             WHERE p.reversed_at IS NULL
+               AND p.payment_date >= ? AND p.payment_date <= ?
+            """;
+        return toMoney(jdbc.queryForList(sql, from, toInclusive, from, toInclusive).get(0).get("total"));
+    }
+
+    /** Supplies in the period that reach no master worksite. Separate from unallocated money. */
+    public BigDecimal unassignedSuppliesBetween(LocalDate from, LocalDate toInclusive) {
+        String sql = """
+            SELECT COALESCE(SUM(COALESCE(i.total, i.net_total)), 0) AS total
+              FROM invoice i
+              LEFT JOIN worksites w ON w.id = i.worksite_id
+             WHERE (i.worksite_id IS NULL OR w.id IS NULL OR w.master_worksite_id IS NULL)
+               AND i.date >= ? AND i.date < ?
+            """;
+        return toMoney(jdbc.queryForList(sql, startTs(from), endTsExclusive(toInclusive)).get(0).get("total"));
+    }
+
+    /** Approved name, nickname and notes, where this business keeps alternative spellings. */
+    public Map<Long, String[]> searchableMasterText() {
+        Map<Long, String[]> out = new HashMap<>();
+        for (Map<String, Object> r : jdbc.queryForList(
+                "SELECT id, approved_name, nickname, notes FROM master_worksites")) {
+            Long id = toLong(r.get("id"));
+            if (id == null) continue;
+            out.put(id, new String[]{
+                    str(r.get("approved_name")), str(r.get("nickname")), str(r.get("notes")) });
+        }
+        return out;
+    }
+
+    private Set<Long> idSet(String sql, Object... args) {
+        Set<Long> out = new java.util.LinkedHashSet<>();
+        for (Map<String, Object> r : jdbc.queryForList(sql, args)) {
+            Long id = toLong(r.get("master_id"));
+            if (id != null) out.add(id);
+        }
+        return out;
+    }
+
+    private static String str(Object v) { return v == null ? "" : String.valueOf(v); }
+
+    /** invoice.date is a wall-clock LocalDateTime, so business dates bound it directly. */
+    private static java.sql.Timestamp startTs(LocalDate d) {
+        return java.sql.Timestamp.valueOf(d.atStartOfDay());
+    }
+
+    private static java.sql.Timestamp endTsExclusive(LocalDate inclusiveEnd) {
+        return java.sql.Timestamp.valueOf(inclusiveEnd.plusDays(1).atStartOfDay());
     }
 
     /**
