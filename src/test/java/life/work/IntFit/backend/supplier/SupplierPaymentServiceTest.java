@@ -105,8 +105,10 @@ class SupplierPaymentServiceTest {
     }
 
     private WorksiteRow rowFor(long masterId) {
-        return service.outstanding().stream().filter(r -> r.masterWorksiteId() == masterId).findFirst()
-                .orElseGet(() -> service.browse(null, 0, 100, LocalDate.of(2026, 10, 27)).rows().stream()
+        return service.outstanding().stream()
+                .filter(r -> r.masterWorksiteId() == masterId).findFirst()
+                .orElseGet(() -> service.browse(null, 0, 100, LocalDate.of(2026, 10, 27),
+                                WorksiteQuery.defaults()).rows().stream()
                         .filter(r -> r.masterWorksiteId() == masterId).findFirst().orElseThrow());
     }
 
@@ -465,13 +467,13 @@ class SupplierPaymentServiceTest {
 
     @Test void browsingRanksByLatestActivityAndPagesStably() {
         // Site B has the recent invoice (2026-10-20); Site A's is from 2024.
-        var page = service.browse(null, 0, 1, LocalDate.of(2026, 10, 27));
+        var page = service.browse(null, 0, 1, LocalDate.of(2026, 10, 27), WorksiteQuery.defaults());
         assertEquals(1, page.rows().size());
         assertEquals(SITE_B, page.rows().get(0).masterWorksiteId());
         assertTrue(page.hasMore());
         assertNotNull(page.snapshotId());
 
-        var page2 = service.browse(page.snapshotId(), page.nextOffset(), 1, null);
+        var page2 = service.browse(page.snapshotId(), page.nextOffset(), 1, null, WorksiteQuery.defaults());
         assertEquals(SITE_A, page2.rows().get(0).masterWorksiteId());
         assertFalse(page2.hasMore());
         // Balances on a page are live, not frozen with the order.
@@ -481,6 +483,6 @@ class SupplierPaymentServiceTest {
 
     @Test void expiredOrUnknownSnapshotIsReportedNotSilentlyRebuilt() {
         assertEquals(410, assertThrows(SupplierPaymentService.Problem.class,
-                () -> service.browse("no-such-snapshot", 0, 10, null)).status);
+                () -> service.browse("no-such-snapshot", 0, 10, null, WorksiteQuery.defaults())).status);
     }
 }

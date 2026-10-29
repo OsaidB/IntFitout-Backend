@@ -98,7 +98,9 @@ try {
     # Both guarded MySQL suites run against the same disposable container.
     $suites = 'ReportingMySqlIntegrationTest'
     if ($IntegrationMethods) { $suites += '#' + $IntegrationMethods }
-    if (-not $IntegrationMethods) { $suites += ',SupplierPaymentMySqlIntegrationTest' }
+    if (-not $IntegrationMethods) {
+        $suites += ',SupplierPaymentMySqlIntegrationTest,SupplierPeriodMySqlIntegrationTest'
+    }
     Push-Location -LiteralPath $projectRoot
     try {
         $logPath = Join-Path $projectRoot 'target/reporting-mysql-validation.log'
