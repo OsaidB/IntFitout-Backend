@@ -41,6 +41,23 @@ public class CloseoutDraft {
     @Column(name = "draft_json", nullable = false, columnDefinition = "LONGTEXT")
     private String draftJson;
 
+    /**
+     * Optimistic-lock revision, bumped by the database on every accepted write.
+     *
+     * A draft is one JSON blob holding every room, type and measurement, so an unchecked
+     * write does not merge - it replaces the lot. Hibernate turns this column into
+     * "UPDATE ... WHERE id = ? AND version = ?", which is decided atomically by the
+     * database. That is deliberately not the same as reading the row, comparing a
+     * timestamp in application code and then saving: two writers can both pass that kind
+     * of check and the second still wins silently.
+     *
+     * Device clocks play no part in it.
+     */
+    @Version
+    @Column(name = "version", nullable = false)
+    @Builder.Default
+    private Long version = 0L;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
