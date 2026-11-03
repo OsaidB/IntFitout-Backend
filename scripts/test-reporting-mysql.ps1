@@ -23,7 +23,8 @@ $configurationPath = Join-Path $projectRoot 'src/main/resources/application.prop
 $configurationHash = (Get-FileHash -LiteralPath $configurationPath -Algorithm SHA256).Hash
 $variableNames = @('MYSQL_ROOT_PASSWORD','MYSQL_DATABASE','MYSQL_USER','MYSQL_PASSWORD',
     'INTFITOUT_MYSQL_TEST_ENABLED','INTFITOUT_MYSQL_TEST_PORT','INTFITOUT_MYSQL_TEST_USER',
-    'INTFITOUT_MYSQL_TEST_PASSWORD','INTFITOUT_MYSQL_TEST_RUN_ID','MAVEN_SKIP_RC')
+    'INTFITOUT_MYSQL_TEST_PASSWORD','INTFITOUT_MYSQL_TEST_RUN_ID','MAVEN_SKIP_RC',
+    'INTFITOUT_MYSQL_CLOSEOUT_DB')
 $previousEnvironment = @{}
 foreach ($name in $variableNames) { $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 
@@ -34,6 +35,13 @@ function Assert-LocalDocker {
     }
     $serverOs = & docker --context desktop-linux version --format '{{.Server.Os}}'
     if ($LASTEXITCODE -ne 0 -or $serverOs -ne 'linux') { throw 'Local Docker Linux engine unavailable. No database fallback is permitted.' }
+}
+
+function Invoke-RootSql([string]$Sql) {
+    # Root is used only to create this run's second throwaway schema and grant the run's
+    # own user access to it. No password is passed on the command line or echoed.
+    & docker exec --env MYSQL_PWD_ROOT=$env:MYSQL_ROOT_PASSWORD $containerName sh -c `
+        'export MYSQL_PWD="$MYSQL_PWD_ROOT"; exec mysql --protocol=tcp --host=127.0.0.1 --user=root --batch --skip-column-names --execute="$1"' sh $Sql
 }
 
 function Invoke-TestSql([string]$Sql) {
@@ -91,6 +99,17 @@ try {
     if ($mysqlVersion -ne '9.7.2') { throw 'Unexpected disposable MySQL version; expected exactly 9.7.2. Tests were not started.' }
     Write-Output ('Pinned image: ' + $image)
     $env:INTFITOUT_MYSQL_TEST_ENABLED = 'true'
+    # The JPA suite lets Hibernate create tables from the entity mappings, which produces
+    # the full column set (including NOT NULL columns without defaults). The raw-SQL suites
+    # create deliberately narrow fixture tables under the same names. Giving the JPA suite
+    # its own schema keeps the two from fighting over one `worksites` table.
+    $closeoutDatabase = 'intfitout_closeout_validation'
+    $createSql = 'CREATE DATABASE IF NOT EXISTS ' + $closeoutDatabase +
+        '; GRANT ALL PRIVILEGES ON ' + $closeoutDatabase + '.* TO ' + "'" + $env:MYSQL_USER + "'@'%'" +
+        '; FLUSH PRIVILEGES;'
+    Invoke-RootSql $createSql | Out-Null
+    $env:INTFITOUT_MYSQL_CLOSEOUT_DB = $closeoutDatabase
+
     $env:INTFITOUT_MYSQL_TEST_USER = $env:MYSQL_USER
     $env:INTFITOUT_MYSQL_TEST_PASSWORD = $env:MYSQL_PASSWORD
     $env:INTFITOUT_MYSQL_TEST_RUN_ID = $runId
@@ -99,7 +118,7 @@ try {
     $suites = 'ReportingMySqlIntegrationTest'
     if ($IntegrationMethods) { $suites += '#' + $IntegrationMethods }
     if (-not $IntegrationMethods) {
-        $suites += ',SupplierPaymentMySqlIntegrationTest,SupplierPeriodMySqlIntegrationTest'
+        $suites += ',SupplierPaymentMySqlIntegrationTest,SupplierPeriodMySqlIntegrationTest,CloseoutDraftConcurrencyMySqlIntegrationTest,CloseoutDraftServiceMySqlIntegrationTest'
     }
     Push-Location -LiteralPath $projectRoot
     try {
