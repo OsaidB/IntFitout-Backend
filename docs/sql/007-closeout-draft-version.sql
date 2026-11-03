@@ -1,0 +1,108 @@
+-- MANUAL. After 001-006. Never edit or rerun 001-006.
+--
+-- Closeout draft concurrency: the `version` revision column on closeout_drafts.
+--
+-- =====================================================================================
+--  DO NOT RUN THE ADD COLUMN STATEMENT ON PRODUCTION. IT IS ALREADY APPLIED THERE.
+-- =====================================================================================
+--
+-- PRODUCTION STATUS: APPLIED AND VERIFIED (2026-11-03)
+--
+--   closeout_drafts.version
+--     COLUMN_TYPE   bigint
+--     IS_NULLABLE   NO
+--     COLUMN_DEFAULT 0
+--
+--   The column reached production through an accidental application startup against the
+--   production datasource on 2026-11-02, where spring.jpa.hibernate.ddl-auto=update issued
+--   `alter table closeout_drafts add column version bigint not null` - without a DEFAULT.
+--   See docs/closeout-version-incident.md for the full record.
+--
+--   The operator then took a backup and corrected the missing default:
+--       ALTER TABLE railway.closeout_drafts ALTER COLUMN version SET DEFAULT 0;
+--   executed successfully with zero warnings, and verified the three values above.
+--
+--   Production therefore already matches this script's intent. Running the ADD COLUMN
+--   below against production would fail with "Duplicate column name 'version'".
+--
+-- WHAT TO DO ON PRODUCTION
+--   Only the verification queries in section 3. Nothing else.
+--
+-- WHAT TO DO ON ANY OTHER ENVIRONMENT (a restored copy, staging, a fresh database)
+--   Run section 1 only if section 0 shows the column is missing.
+--
+-- WHY THE COLUMN IS NEEDED
+--   A closeout draft is a single JSON blob holding every room, type and measurement, so an
+--   unchecked write replaces another device's work wholesale rather than merging with it.
+--   The check has to be decided by the database: reading the row, comparing a timestamp in
+--   application code and then saving is not atomic - two writers can both pass that check
+--   and the second still wins silently.
+--
+--   Hibernate's @Version turns the save into
+--       UPDATE closeout_drafts SET draft_json = ?, version = ? WHERE id = ? AND version = ?
+--   so the loser updates zero rows and is told. Creating the very first draft races on the
+--   existing unique key uk_closeout_drafts_master_worksite instead.
+--
+--   updated_at was considered and rejected: it is set from the database clock at write time
+--   and has limited precision, so two saves inside the same tick are indistinguishable, and
+--   nothing stops a stale writer from carrying a timestamp that happens to compare equal.
+--   A monotonic counter owned by the row has neither problem.
+--
+--   The application pairs this counter with the row id as an opaque revision token,
+--   "<draftId>:<version>", so a revision from a draft that was deleted and recreated cannot
+--   pass for its replacement's - a new row restarts the counter at 0.
+--
+-- WHY ddl-auto IS NOT A SUBSTITUTE
+--   ddl-auto=update adds the column without a DEFAULT, which is exactly what happened in the
+--   incident and had to be corrected by hand afterwards. It is also not a migration: it runs
+--   whenever an application starts, against whatever datasource that application is pointed
+--   at. Apply schema changes deliberately, with this script.
+--
+-- EXISTING DATA
+--   No draft JSON is read, rewritten or reinterpreted by this script. Existing drafts simply
+--   start at revision 0. No measurement, total or finalized record is touched.
+--
+-- ROLLBACK
+--   Dropping the column is safe ONLY while no backend with @Version mapped is live against
+--   the database; a running new backend would fail on every draft read and write. Roll the
+--   backend back first, then drop. Dropping loses nothing but the counters themselves.
+
+
+-- 0) PRECONDITION CHECK - run this first, on any environment.
+--    Expect 1 on production (already applied). Expect 0 before applying elsewhere.
+--
+--    SELECT COUNT(*) AS version_column_present
+--      FROM information_schema.COLUMNS
+--     WHERE TABLE_SCHEMA = DATABASE()
+--       AND TABLE_NAME   = 'closeout_drafts'
+--       AND COLUMN_NAME  = 'version';
+
+
+-- 1) APPLY - only where section 0 returned 0. NOT production.
+--    Left commented so it cannot be run by pasting the whole file.
+--
+-- ALTER TABLE closeout_drafts
+--     ADD COLUMN version BIGINT NOT NULL DEFAULT 0;
+
+
+-- 2) If a database already has the column but no default (the incident's shape), repair it
+--    without touching the data. This is the statement already run on production.
+--
+-- ALTER TABLE closeout_drafts
+--     ALTER COLUMN version SET DEFAULT 0;
+
+
+-- 3) VERIFY - safe to run anywhere, including production.
+--
+--    SELECT COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT
+--      FROM information_schema.COLUMNS
+--     WHERE TABLE_SCHEMA = DATABASE()
+--       AND TABLE_NAME   = 'closeout_drafts'
+--       AND COLUMN_NAME  = 'version';
+--    -- production, confirmed 2026-11-03: bigint / NO / 0
+--
+--    SELECT COUNT(*) AS drafts, COUNT(version) AS with_version FROM closeout_drafts;
+--    -- the two numbers must match.
+--
+--    SHOW INDEX FROM closeout_drafts WHERE Key_name = 'uk_closeout_drafts_master_worksite';
+--    -- expect one row: this unique key decides the concurrent-create race.
