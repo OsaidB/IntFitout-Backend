@@ -15,6 +15,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -84,7 +85,7 @@ class CloseoutDraftControllerMvcTest {
     @Test
     @DisplayName("200: an accepted save returns the new revision token")
     void acceptedSaveIs200() throws Exception {
-        when(service.upsertDraft(eq(MASTER_ID), any(), eq("1:4")))
+        when(service.upsertDraft(eq(MASTER_ID), any(), eq("1:4"), anyBoolean()))
                 .thenReturn(dto("1:5", 5L, "{\"types\":[]}"));
 
         mvc.perform(put(url())
@@ -98,7 +99,7 @@ class CloseoutDraftControllerMvcTest {
     @Test
     @DisplayName("409: a conflict returns the stored draft so the app can show it")
     void conflictIs409WithCurrentDraft() throws Exception {
-        when(service.upsertDraft(eq(MASTER_ID), any(), eq("1:4")))
+        when(service.upsertDraft(eq(MASTER_ID), any(), eq("1:4"), anyBoolean()))
                 .thenThrow(new CloseoutDraftService.DraftConflictException(
                         "This closeout changed on another device.",
                         dto("1:9", 9L, "{\"types\":[{\"id\":\"theirs\"}]}")));
@@ -117,7 +118,7 @@ class CloseoutDraftControllerMvcTest {
     @Test
     @DisplayName("428: no revision at all is refused, and nothing is saved")
     void missingRevisionIs428() throws Exception {
-        when(service.upsertDraft(eq(MASTER_ID), any(), isNull()))
+        when(service.upsertDraft(eq(MASTER_ID), any(), isNull(), anyBoolean()))
                 .thenThrow(new CloseoutDraftService.DraftVersionRequiredException(
                         "This version of the app cannot save closeouts safely. Please update the app."));
 
@@ -134,7 +135,7 @@ class CloseoutDraftControllerMvcTest {
     void oldClientBodyShapeCarriesNoRevision() throws Exception {
         // The previous app build PUT the draft directly, with no If-Match and no
         // baseRevision. It must arrive as null - the refusable case - and never be guessed.
-        when(service.upsertDraft(anyLong(), any(), isNull()))
+        when(service.upsertDraft(anyLong(), any(), isNull(), anyBoolean()))
                 .thenThrow(new CloseoutDraftService.DraftVersionRequiredException("update"));
 
         mvc.perform(put(url())
@@ -142,13 +143,13 @@ class CloseoutDraftControllerMvcTest {
                         .content("{\"types\":[{\"id\":\"t1\"}],\"updatedAt\":\"2026-01-01T00:00:00Z\"}"))
                 .andExpect(status().is(428));
 
-        verify(service).upsertDraft(eq(MASTER_ID), any(), isNull());
+        verify(service).upsertDraft(eq(MASTER_ID), any(), isNull(), anyBoolean());
     }
 
     @Test
     @DisplayName("the revision may travel in the body when a client cannot set headers")
     void revisionFromBodyIsAccepted() throws Exception {
-        when(service.upsertDraft(eq(MASTER_ID), any(), eq("1:7")))
+        when(service.upsertDraft(eq(MASTER_ID), any(), eq("1:7"), anyBoolean()))
                 .thenReturn(dto("1:8", 8L, "{\"types\":[]}"));
 
         mvc.perform(put(url())
@@ -161,7 +162,7 @@ class CloseoutDraftControllerMvcTest {
     @Test
     @DisplayName("a quoted ETag revision is unwrapped")
     void quotedIfMatchIsAccepted() throws Exception {
-        when(service.upsertDraft(eq(MASTER_ID), any(), eq("1:4")))
+        when(service.upsertDraft(eq(MASTER_ID), any(), eq("1:4"), anyBoolean()))
                 .thenReturn(dto("1:5", 5L, "{\"types\":[]}"));
 
         mvc.perform(put(url())
@@ -174,7 +175,7 @@ class CloseoutDraftControllerMvcTest {
     @Test
     @DisplayName("the new-draft sentinel passes through as sent")
     void newDraftSentinelPassesThrough() throws Exception {
-        when(service.upsertDraft(eq(MASTER_ID), any(), eq("-1")))
+        when(service.upsertDraft(eq(MASTER_ID), any(), eq("-1"), anyBoolean()))
                 .thenReturn(dto("3:0", 0L, "{\"types\":[]}"));
 
         mvc.perform(put(url())

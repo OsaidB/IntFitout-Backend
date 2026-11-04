@@ -10,6 +10,7 @@ import life.work.IntFit.backend.repository.MasterWorksiteRepository;
 import life.work.IntFit.backend.service.CloseoutDraftService;
 import life.work.IntFit.backend.service.impl.CloseoutDraftServiceImpl;
 import life.work.IntFit.backend.service.impl.CloseoutDraftWriter;
+import life.work.IntFit.backend.service.impl.CloseoutDraftWriter.WriteResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -23,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -119,8 +121,8 @@ class CloseoutDraftServiceTest {
     @Test
     @DisplayName("editing the stored revision is accepted and returns the next token")
     void matchingRevisionIsAccepted() {
-        when(writer.update(eq(MASTER_ID), eq("1:4"), anyString()))
-                .thenReturn(stored(1L, "{\"types\":[1]}", 5L));
+        when(writer.update(eq(MASTER_ID), eq("1:4"), any(), anyBoolean()))
+                .thenReturn(new WriteResult(stored(1L, "{\"types\":[1]}", 5L), java.util.List.of()));
 
         CloseoutDraftDTO dto = service.upsertDraft(MASTER_ID, body("{\"types\":[1]}"), "1:4");
 
@@ -131,13 +133,13 @@ class CloseoutDraftServiceTest {
     @Test
     @DisplayName("creating the first draft is accepted on the new-draft sentinel")
     void firstCreateUsesSentinel() {
-        when(writer.create(any(), anyString())).thenReturn(stored(3L, "{\"types\":[]}", 0L));
+        when(writer.create(any(), any(), anyBoolean())).thenReturn(new WriteResult(stored(3L, "{\"types\":[]}", 0L), java.util.List.of()));
 
         CloseoutDraftDTO dto = service.upsertDraft(MASTER_ID, body("{\"types\":[]}"), NEW_DRAFT);
 
         assertEquals("3:0", dto.getRevision(), "a fresh draft starts at counter 0");
-        verify(writer).create(any(), anyString());
-        verify(writer, never()).update(anyLong(), anyString(), anyString());
+        verify(writer).create(any(), any(), anyBoolean());
+        verify(writer, never()).update(anyLong(), anyString(), any(), anyBoolean());
     }
 
     // ----------------------------------------------------------------- conflicts
@@ -146,7 +148,7 @@ class CloseoutDraftServiceTest {
     @DisplayName("a stale revision is refused and the stored draft travels with the refusal")
     void staleRevisionIsRefused() {
         // The writer reports no match, and the current draft is then read cleanly.
-        when(writer.update(eq(MASTER_ID), eq("1:4"), anyString())).thenReturn(null);
+        when(writer.update(eq(MASTER_ID), eq("1:4"), any(), anyBoolean())).thenReturn(null);
         when(writer.readCurrent(MASTER_ID)).thenReturn(Optional.of(stored(1L, "{\"types\":[\"theirs\"]}", 9L)));
 
         CloseoutDraftService.DraftConflictException e = assertThrows(
@@ -163,7 +165,7 @@ class CloseoutDraftServiceTest {
     void revisionFromAnotherDraftRowIsRefused() {
         // The replacement row restarted its counter at 0, so the counter alone would make
         // the old "1:0" look current. The row identity is what refuses it.
-        when(writer.update(eq(MASTER_ID), eq("1:0"), anyString())).thenReturn(null);
+        when(writer.update(eq(MASTER_ID), eq("1:0"), any(), anyBoolean())).thenReturn(null);
         when(writer.readCurrent(MASTER_ID))
                 .thenReturn(Optional.of(stored(7L, "{\"types\":[\"replacement\"]}", 0L)));
 
@@ -177,7 +179,7 @@ class CloseoutDraftServiceTest {
     @Test
     @DisplayName("an optimistic-lock failure becomes a conflict, not a crash")
     void optimisticLockFailureBecomesConflict() {
-        when(writer.update(eq(MASTER_ID), anyString(), anyString()))
+        when(writer.update(eq(MASTER_ID), anyString(), any(), anyBoolean()))
                 .thenThrow(new ObjectOptimisticLockingFailureException(CloseoutDraft.class, 1L));
         when(writer.readCurrent(MASTER_ID)).thenReturn(Optional.of(stored(1L, "{\"types\":[]}", 3L)));
 
@@ -190,7 +192,7 @@ class CloseoutDraftServiceTest {
     @Test
     @DisplayName("losing the create race becomes a conflict carrying the winner's draft")
     void uniqueKeyRaceBecomesConflict() {
-        when(writer.create(any(), anyString()))
+        when(writer.create(any(), any(), anyBoolean()))
                 .thenThrow(new DataIntegrityViolationException("duplicate key"));
         when(writer.readCurrent(MASTER_ID)).thenReturn(Optional.of(stored(4L, "{\"types\":[\"theirs\"]}", 0L)));
 
@@ -205,7 +207,7 @@ class CloseoutDraftServiceTest {
     @Test
     @DisplayName("saving a revision for a draft the server no longer has is refused")
     void updateOfMissingDraftIsRefused() {
-        when(writer.update(eq(MASTER_ID), anyString(), anyString())).thenReturn(null);
+        when(writer.update(eq(MASTER_ID), anyString(), any(), anyBoolean())).thenReturn(null);
         when(writer.readCurrent(MASTER_ID)).thenReturn(Optional.empty());
 
         CloseoutDraftService.DraftConflictException e = assertThrows(
@@ -256,8 +258,8 @@ class CloseoutDraftServiceTest {
         // Fields the next batch will add (seq, floor) must survive a round trip now, so
         // numbering and floor metadata are not silently lost by an older server.
         String json = "{\"types\":[{\"id\":\"t1\",\"rows\":[{\"id\":\"r1\",\"seq\":12,\"floor\":\"2\"}]}]}";
-        when(writer.update(eq(MASTER_ID), eq("1:0"), anyString()))
-                .thenAnswer(inv -> stored(1L, inv.getArgument(2), 1L));
+        when(writer.update(eq(MASTER_ID), eq("1:0"), any(), anyBoolean()))
+                .thenAnswer(inv -> new WriteResult(stored(1L, inv.getArgument(2).toString(), 1L), java.util.List.of()));
 
         CloseoutDraftDTO dto = service.upsertDraft(MASTER_ID, body(json), "1:0");
 

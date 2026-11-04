@@ -334,6 +334,144 @@ class CloseoutDraftServiceMySqlIntegrationTest {
                 "the replacement draft must survive: " + storedJson());
     }
 
+    // ----------------------------------------------------------------- numbering
+
+    private long storedMark() {
+        return jdbc.queryForObject(
+                "SELECT next_measurement_seq FROM closeout_drafts WHERE master_worksite_id = ?",
+                Long.class, masterId);
+    }
+
+    private static String draftWithRows(String... rowJson) {
+        return "{\"types\":[{\"id\":\"t1\",\"name\":\"Ceiling\",\"unit\":\"m²\","
+                + "\"category\":\"gypsum\",\"unitPrice\":\"10\",\"rows\":["
+                + String.join(",", rowJson) + "]}]}";
+    }
+
+    private java.util.List<Long> seqsOf(CloseoutDraftDTO dto) {
+        java.util.List<Long> out = new ArrayList<>();
+        for (JsonNode t : dto.getDraft().get("types")) {
+            for (JsonNode r : t.get("rows")) {
+                out.add(r.hasNonNull("seq") ? r.get("seq").asLong() : null);
+            }
+        }
+        return out;
+    }
+
+    @Test
+    @DisplayName("the server allocates measurement numbers and persists the high-water mark")
+    void allocatesAndPersistsTheMark() {
+        CloseoutDraftDTO first = service.upsertDraft(masterId,
+                body(draftWithRows("{\"id\":\"a\"}", "{\"id\":\"b\"}")), NEW_DRAFT);
+
+        assertEquals(java.util.List.of(1L, 2L), seqsOf(first));
+        assertEquals(3L, storedMark(), "the mark is kept in its own column, not in the blob");
+    }
+
+    @Test
+    @DisplayName("two devices adding a row concurrently cannot be given the same number")
+    void concurrentAllocationCannotCollide() throws Exception {
+        CloseoutDraftDTO base = service.upsertDraft(masterId,
+                body(draftWithRows("{\"id\":\"a\"}")), NEW_DRAFT);
+        String rev = base.getRevision();
+        assertEquals(2L, storedMark());
+
+        // Both devices add their own new row, from the same revision.
+        List<Callable<Object>> jobs = List.of(
+                () -> service.upsertDraft(masterId,
+                        body(draftWithRows("{\"id\":\"a\",\"seq\":1}", "{\"id\":\"deviceA\"}")), rev),
+                () -> service.upsertDraft(masterId,
+                        body(draftWithRows("{\"id\":\"a\",\"seq\":1}", "{\"id\":\"deviceB\"}")), rev));
+
+        List<Object> results = race(jobs);
+
+        long accepted = results.stream().filter(r -> r instanceof CloseoutDraftDTO).count();
+        assertEquals(1L, accepted, "the revision check still admits exactly one: " + results);
+
+        // Exactly one allocation happened, so the mark advanced by exactly one.
+        assertEquals(3L, storedMark(), "a refused save must not consume a number");
+
+        CloseoutDraftDTO winner = (CloseoutDraftDTO) results.stream()
+                .filter(r -> r instanceof CloseoutDraftDTO).findFirst().orElseThrow();
+        assertEquals(java.util.List.of(1L, 2L), seqsOf(winner));
+
+        // The loser retries from the new revision. Its row must get 3, never the 2 the
+        // winner's row already holds.
+        String winnerRevision = winner.getRevision();
+        CloseoutDraftDTO retried = service.upsertDraft(masterId,
+                body(draftWithRows("{\"id\":\"a\",\"seq\":1}", "{\"id\":\"winner\",\"seq\":2}",
+                        "{\"id\":\"loser\"}")), winnerRevision);
+
+        assertEquals(java.util.List.of(1L, 2L, 3L), seqsOf(retried));
+        assertEquals(4L, storedMark());
+    }
+
+    @Test
+    @DisplayName("a number retired by a deletion is never handed out again")
+    void deletedNumbersAreNotRecycled() {
+        CloseoutDraftDTO first = service.upsertDraft(masterId,
+                body(draftWithRows("{\"id\":\"a\"}", "{\"id\":\"b\"}")), NEW_DRAFT);
+
+        // Delete b (number 2), then add a replacement.
+        CloseoutDraftDTO second = service.upsertDraft(masterId,
+                body(draftWithRows("{\"id\":\"a\",\"seq\":1}", "{\"id\":\"c\"}")),
+                first.getRevision());
+
+        assertEquals(java.util.List.of(1L, 3L), seqsOf(second), "2 is retired for good");
+        assertEquals(4L, storedMark());
+    }
+
+    @Test
+    @DisplayName("an older client that drops measurement numbers is refused, and nothing is written")
+    void strippedMetadataIsRefused() {
+        CloseoutDraftDTO first = service.upsertDraft(masterId,
+                body(draftWithRows("{\"id\":\"a\"}", "{\"id\":\"b\"}")), NEW_DRAFT);
+        String rev = first.getRevision();
+
+        // A valid revision, but the rows come back with their numbers erased. Revision
+        // checking cannot catch this, which is the whole point of the separate rule.
+        assertThrows(CloseoutDraftService.DraftMetadataRequiredException.class,
+                () -> service.upsertDraft(masterId,
+                        body(draftWithRows("{\"id\":\"a\"}", "{\"id\":\"b\"}")), rev));
+
+        // Untouched: same revision, same numbers, same mark.
+        CloseoutDraftDTO after = service.getDraft(masterId).orElseThrow();
+        assertEquals(rev, after.getRevision(), "a refused save must not advance the revision");
+        assertEquals(java.util.List.of(1L, 2L), seqsOf(after));
+        assertEquals(3L, storedMark());
+    }
+
+    @Test
+    @DisplayName("replacing a draft wholesale cannot reuse numbers or change existing ones")
+    void conflictResolutionPreservesNumbers() {
+        CloseoutDraftDTO first = service.upsertDraft(masterId,
+                body(draftWithRows("{\"id\":\"a\"}", "{\"id\":\"b\"}", "{\"id\":\"c\"}")), NEW_DRAFT);
+        assertEquals(java.util.List.of(1L, 2L, 3L), seqsOf(first));
+
+        // A "keep mine" resolution pushes a device's own draft over the stored one. It holds
+        // only two of the rows, with the numbers it was given, plus one new row.
+        CloseoutDraftDTO kept = service.upsertDraft(masterId,
+                body(draftWithRows("{\"id\":\"a\",\"seq\":1}", "{\"id\":\"c\",\"seq\":3}",
+                        "{\"id\":\"mine\"}")),
+                first.getRevision());
+
+        // Existing rows keep their numbers; the new row gets 4, not the retired 2.
+        assertEquals(java.util.List.of(1L, 3L, 4L), seqsOf(kept));
+        assertEquals(5L, storedMark());
+    }
+
+    @Test
+    @DisplayName("the floor field survives a real round trip and is never invented")
+    void floorRoundTrip() {
+        CloseoutDraftDTO saved = service.upsertDraft(masterId,
+                body(draftWithRows("{\"id\":\"a\",\"floor\":\"2\"}", "{\"id\":\"b\"}")), NEW_DRAFT);
+
+        JsonNode rows = saved.getDraft().get("types").get(0).get("rows");
+        assertEquals("2", rows.get(0).get("floor").asText());
+        assertTrue(!rows.get(1).has("floor") || rows.get(1).get("floor").asText().isEmpty(),
+                "a measurement with no floor must not acquire one");
+    }
+
     // ----------------------------------------------------------------- round trip
 
     @Test
