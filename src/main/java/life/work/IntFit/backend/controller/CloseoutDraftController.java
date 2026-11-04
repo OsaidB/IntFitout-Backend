@@ -40,6 +40,7 @@ public class CloseoutDraftController {
     public ResponseEntity<?> upsertDraft(
             @PathVariable("masterId") Long masterId,
             @RequestHeader(value = "If-Match", required = false) String ifMatch,
+            @RequestHeader(value = "X-Closeout-Metadata", required = false) String metadataHeader,
             @RequestBody JsonNode body
     ) {
         String baseRevision = cleanRevision(ifMatch);
@@ -48,11 +49,32 @@ public class CloseoutDraftController {
         }
         JsonNode draft = (body != null && body.has("draft")) ? body.get("draft") : body;
 
+        /*
+         * Does this caller round-trip measurement metadata?
+         *
+         * It has to be declared, not guessed. A build that predates numbering cannot send
+         * this, so its saves are still checked for stripped numbers. A build that does send
+         * it is reconciled instead: a row arriving without a number the server holds means
+         * that client loaded the draft before allocation, which happens legitimately after a
+         * conflict is resolved by keeping the local copy.
+         */
+        boolean clientUnderstandsMetadata = declaresMetadataSupport(metadataHeader, body);
+
         try {
-            return ResponseEntity.ok(closeoutDraftService.upsertDraft(masterId, draft, baseRevision));
+            return ResponseEntity.ok(closeoutDraftService.upsertDraft(
+                    masterId, draft, baseRevision, clientUnderstandsMetadata));
         } catch (CloseoutDraftService.DraftVersionRequiredException e) {
             return ResponseEntity.status(428).body(Map.of(
                     "error", e.getMessage(), "status", 428, "code", "DRAFT_VERSION_REQUIRED"));
+        } catch (CloseoutDraftService.DraftMetadataRequiredException e) {
+            // Same 428 the client already maps to "please update the app", with a distinct
+            // code so the cause is identifiable in logs. Deliberately NOT a 409: a conflict
+            // invites the user to choose, and one of those choices would discard the
+            // measurement numbers this refusal exists to protect.
+            return ResponseEntity.status(428).body(Map.of(
+                    "error", e.getMessage(), "status", 428,
+                    "code", "DRAFT_METADATA_REQUIRED",
+                    "affectedRows", e.rowIds.size()));
         } catch (CloseoutDraftService.DraftConflictException e) {
             Map<String, Object> payload = new java.util.LinkedHashMap<>();
             payload.put("error", e.getMessage());
@@ -63,6 +85,28 @@ public class CloseoutDraftController {
             payload.put("current", e.current);
             return ResponseEntity.status(409).body(payload);
         }
+    }
+
+    /**
+     * True when the caller states it preserves measurement metadata. Accepted either as the
+     * X-Closeout-Metadata header or as metadataVersion in the body, because a client that
+     * cannot set headers conveniently should not be forced to.
+     */
+    private static boolean declaresMetadataSupport(String header, JsonNode body) {
+        if (header != null && !header.isBlank()) {
+            String cleaned = header.trim();
+            if (cleaned.equals("1") || cleaned.equalsIgnoreCase("v1")) return true;
+        }
+        if (body != null && body.hasNonNull("metadataVersion")) {
+            JsonNode v = body.get("metadataVersion");
+            if (v.isNumber()) return v.asInt() >= 1;
+            try {
+                return Integer.parseInt(v.asText().trim()) >= 1;
+            } catch (NumberFormatException ignored) {
+                return false;
+            }
+        }
+        return false;
     }
 
     /**

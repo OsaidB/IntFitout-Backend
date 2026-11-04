@@ -125,6 +125,10 @@ public class CloseoutFinalizeServiceImpl implements CloseoutFinalizeService {
                                 .rowIndex(rowIndex)
                                 .clientRowId(text(r, "id"))
                                 .room(text(r, "room"))
+                                // Carried across unchanged; no total or formula depends on
+                                // either of these.
+                                .floor(text(r, "floor"))
+                                .measurementSeq(longOrNull(r, "seq"))
                                 .note(text(r, "note"))
                                 .mode(mode)
                                 .lengthVal(len)
@@ -260,6 +264,19 @@ public class CloseoutFinalizeServiceImpl implements CloseoutFinalizeService {
     private BigDecimal money(BigDecimal v) {
         if (v == null) v = BigDecimal.ZERO;
         return v.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /** A positive whole number from the draft JSON, or null when absent or unusable. */
+    private static Long longOrNull(JsonNode node, String field) {
+        if (node == null || !node.isObject()) return null;
+        JsonNode v = node.get(field);
+        if (v == null || v.isNull()) return null;
+        try {
+            long parsed = v.isNumber() ? v.asLong() : Long.parseLong(v.asText().trim());
+            return parsed > 0 ? parsed : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private BigDecimal qty(BigDecimal v) {

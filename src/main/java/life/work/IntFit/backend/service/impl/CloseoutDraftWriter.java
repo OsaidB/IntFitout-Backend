@@ -1,5 +1,8 @@
 package life.work.IntFit.backend.service.impl;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import life.work.IntFit.backend.closeout.MeasurementNumbering;
 import life.work.IntFit.backend.model.entity.CloseoutDraft;
 import life.work.IntFit.backend.model.entity.MasterWorksite;
 import life.work.IntFit.backend.repository.CloseoutDraftRepository;
@@ -29,6 +32,56 @@ import java.util.Optional;
 public class CloseoutDraftWriter {
 
     private final CloseoutDraftRepository drafts;
+    private final ObjectMapper objectMapper;
+
+    /**
+     * What a write did, including the measurement numbers the server allocated.
+     *
+     * The caller needs the saved entity (for the new revision) and the stripped-row report,
+     * which is how an older client that drops unknown JSON fields is caught.
+     */
+    public static final class WriteResult {
+        public final CloseoutDraft saved;
+        public final java.util.List<String> strippedRowIds;
+
+        public WriteResult(CloseoutDraft saved, java.util.List<String> strippedRowIds) {
+            this.saved = saved;
+            this.strippedRowIds = strippedRowIds;
+        }
+    }
+
+    /**
+     * Allocate measurement numbers and serialise the draft, inside the caller's transaction.
+     *
+     * Allocation has to happen here rather than in the service above, because it reads and
+     * advances the high-water mark on the row being written. Doing it outside the transaction
+     * that holds the revision check would let two writers allocate from the same mark.
+     */
+    private MeasurementNumbering.Result numberRows(JsonNode incoming, CloseoutDraft existing,
+                                                   boolean clientUnderstandsMetadata) {
+        JsonNode stored = null;
+        long nextSeq = 1L;
+        if (existing != null) {
+            nextSeq = existing.getNextMeasurementSeq() == null ? 1L : existing.getNextMeasurementSeq();
+            try {
+                stored = objectMapper.readTree(
+                        existing.getDraftJson() == null ? "{}" : existing.getDraftJson());
+            } catch (Exception ignored) {
+                // Unparsable stored JSON cannot tell us which numbers are in use, so the
+                // mark alone governs. It only moves upwards, so nothing is reused.
+                stored = null;
+            }
+        }
+        return MeasurementNumbering.allocate(incoming, stored, nextSeq, clientUnderstandsMetadata);
+    }
+
+    private String writeJson(JsonNode node) {
+        try {
+            return objectMapper.writeValueAsString(node);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Failed to serialize draft JSON", e);
+        }
+    }
 
     /**
      * Insert the first draft for a worksite.
@@ -37,12 +90,15 @@ public class CloseoutDraftWriter {
      * rather than producing two drafts.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public CloseoutDraft create(MasterWorksite master, String json) {
+    public WriteResult create(MasterWorksite master, JsonNode incoming,
+                              boolean clientUnderstandsMetadata) {
+        MeasurementNumbering.Result numbered = numberRows(incoming, null, clientUnderstandsMetadata);
         CloseoutDraft fresh = CloseoutDraft.builder()
                 .masterWorksite(master)
-                .draftJson(json)
+                .draftJson(writeJson(numbered.draft))
                 .build();
-        return drafts.saveAndFlush(fresh);
+        fresh.setNextMeasurementSeq(numbered.nextSeq);
+        return new WriteResult(drafts.saveAndFlush(fresh), numbered.strippedRowIds);
     }
 
     /**
@@ -53,14 +109,27 @@ public class CloseoutDraftWriter {
      * itself conditional, which covers the window this check cannot.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public CloseoutDraft update(Long masterWorksiteId, String expectedRevision, String json) {
+    public WriteResult update(Long masterWorksiteId, String expectedRevision, JsonNode incoming,
+                              boolean clientUnderstandsMetadata) {
         CloseoutDraft entity = drafts.findByMasterWorksite_Id(masterWorksiteId).orElse(null);
         if (entity == null) return null;                     // deleted meanwhile
         if (!expectedRevision.equals(entity.getId() + ":" + entity.getVersion())) {
             return null;                                     // someone else wrote first
         }
-        entity.setDraftJson(json);
-        return drafts.saveAndFlush(entity);
+
+        MeasurementNumbering.Result numbered = numberRows(incoming, entity, clientUnderstandsMetadata);
+        if (!numbered.strippedRowIds.isEmpty()) {
+            // Report without writing. The caller turns this into a refusal; letting it
+            // through would renumber measurements the user can already see.
+            return new WriteResult(null, numbered.strippedRowIds);
+        }
+
+        entity.setDraftJson(writeJson(numbered.draft));
+        // The mark never goes down, so a number cannot be handed out twice even if the
+        // incoming draft has fewer rows than the stored one.
+        long current = entity.getNextMeasurementSeq() == null ? 1L : entity.getNextMeasurementSeq();
+        entity.setNextMeasurementSeq(Math.max(current, numbered.nextSeq));
+        return new WriteResult(drafts.saveAndFlush(entity), java.util.List.of());
     }
 
     /**

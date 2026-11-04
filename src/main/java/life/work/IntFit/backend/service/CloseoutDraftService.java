@@ -13,7 +13,31 @@ public interface CloseoutDraftService {
      *                     or "-1" for "no draft yet". Null is refused, so a client that
      *                     predates revisions cannot overwrite work it never saw.
      */
-    CloseoutDraftDTO upsertDraft(Long masterWorksiteId, JsonNode draft, String baseRevision);
+    CloseoutDraftDTO upsertDraft(Long masterWorksiteId, JsonNode draft, String baseRevision,
+                                 boolean clientUnderstandsMetadata);
+
+    /** Convenience for callers that do not declare metadata support, such as an older app. */
+    default CloseoutDraftDTO upsertDraft(Long masterWorksiteId, JsonNode draft, String baseRevision) {
+        return upsertDraft(masterWorksiteId, draft, baseRevision, false);
+    }
+
+    /**
+     * The caller sent a valid revision but dropped measurement metadata it does not
+     * understand - the signature of an app build released before numbering.
+     *
+     * Revision checking cannot catch this: the revision is genuinely current, the caller
+     * simply round-trips the draft with every measurement number erased. Accepting it would
+     * renumber measurements that people have already written down, so it is refused and the
+     * client is told to update.
+     */
+    class DraftMetadataRequiredException extends RuntimeException {
+        public final transient java.util.List<String> rowIds;
+
+        public DraftMetadataRequiredException(String message, java.util.List<String> rowIds) {
+            super(message);
+            this.rowIds = rowIds;
+        }
+    }
 
     /** The caller sent no revision at all. */
     class DraftVersionRequiredException extends RuntimeException {

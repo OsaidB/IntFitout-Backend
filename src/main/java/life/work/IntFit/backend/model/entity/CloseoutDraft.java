@@ -58,6 +58,20 @@ public class CloseoutDraft {
     @Builder.Default
     private Long version = 0L;
 
+    /**
+     * The next measurement number to hand out for this closeout: the allocation high-water
+     * mark.
+     *
+     * It lives in its own column rather than inside draft_json on purpose. The draft blob is
+     * supplied by the client, and an older app build round-trips that blob while dropping
+     * fields it does not know about. If the mark lived in the blob, such a client would reset
+     * it and the next new measurement would reuse a number already shown to someone. In a
+     * column, only the server can move it, and it only ever moves upwards.
+     */
+    @Column(name = "next_measurement_seq", nullable = false)
+    @Builder.Default
+    private Long nextMeasurementSeq = 1L;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

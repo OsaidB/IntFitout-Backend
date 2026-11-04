@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import life.work.IntFit.backend.service.CloseoutDraftService.DraftConflictException;
+import life.work.IntFit.backend.service.CloseoutDraftService.DraftMetadataRequiredException;
 import life.work.IntFit.backend.service.CloseoutDraftService.DraftVersionRequiredException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -73,7 +74,8 @@ public class CloseoutDraftServiceImpl implements CloseoutDraftService {
      * unrestricted overwrite path.
      */
     @Override
-    public CloseoutDraftDTO upsertDraft(Long masterWorksiteId, JsonNode draft, String baseRevision) {
+    public CloseoutDraftDTO upsertDraft(Long masterWorksiteId, JsonNode draft, String baseRevision,
+                                        boolean clientUnderstandsMetadata) {
         if (draft == null) {
             throw new IllegalArgumentException("Draft body is required");
         }
@@ -85,16 +87,17 @@ public class CloseoutDraftServiceImpl implements CloseoutDraftService {
         MasterWorksite master = masterWorksiteRepository.findById(masterWorksiteId)
                 .orElseThrow(() -> new EntityNotFoundException("MasterWorksite not found: " + masterWorksiteId));
 
-        String json;
+        // Reject a body that cannot be serialised before touching the database. The writer
+        // serialises the numbered draft itself, after allocation.
         try {
-            json = objectMapper.writeValueAsString(draft);
+            objectMapper.writeValueAsString(draft);
         } catch (Exception e) {
             throw new IllegalArgumentException("Failed to serialize draft JSON", e);
         }
 
         if (NEW_DRAFT_BASE.equals(baseRevision)) {
             try {
-                return toDtoSafe(writer.create(master, json));
+                return toDtoSafe(writer.create(master, draft, clientUnderstandsMetadata).saved);
             } catch (DataIntegrityViolationException race) {
                 // The unique key decided: a draft already exists, created either long ago
                 // or by another device in this same instant. Read it on a clean transaction.
@@ -102,21 +105,28 @@ public class CloseoutDraftServiceImpl implements CloseoutDraftService {
             }
         }
 
-        CloseoutDraft saved;
+        CloseoutDraftWriter.WriteResult written;
         try {
-            saved = writer.update(masterWorksiteId, baseRevision, json);
+            written = writer.update(masterWorksiteId, baseRevision, draft, clientUnderstandsMetadata);
         } catch (OptimisticLockingFailureException lost) {
             // The conditional UPDATE matched no row: another transaction committed between
             // this one's read and its flush.
             throw conflict("This closeout changed on another device.", masterWorksiteId);
         }
 
-        if (saved == null) {
+        if (written == null) {
             // The revision no longer matches, or the draft was deleted. Either way the
             // caller must look before saving again.
             return failStale(masterWorksiteId);
         }
-        return toDtoSafe(saved);
+        if (!written.strippedRowIds.isEmpty()) {
+            // An older build round-tripped the draft without the measurement numbers.
+            // Nothing was written.
+            throw new DraftMetadataRequiredException(
+                    "This version of the app would erase measurement numbers. Please update the app.",
+                    written.strippedRowIds);
+        }
+        return toDtoSafe(written.saved);
     }
 
     /**
